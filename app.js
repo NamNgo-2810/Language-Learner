@@ -505,16 +505,29 @@ async function generateReviewStory() {
   }
 }
 
+// Highlights every word from the whole vocabulary (not just the ones the AI
+// says it intentionally used) that actually appears in the text. Longest
+// words are matched first so a multi-character word wins over a shorter
+// word that happens to be one of its characters.
+function highlightLearnedWords(text, entries) {
+  const words = [...new Set(entries.map((e) => e.char).filter(Boolean))].sort(
+    (a, b) => b.length - a.length
+  );
+  const escaped = escapeHtml(text);
+  if (!words.length) return escaped;
+
+  const pattern = new RegExp(
+    `(${words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`,
+    "g"
+  );
+  return escaped.replace(pattern, '<span class="target">$1</span>');
+}
+
 function renderReviewStory(data) {
-  let html = escapeHtml(data.story);
-  (data.used || []).forEach((ch) => {
-    if (!ch) return;
-    html = html.split(ch).join(`<span class="target">${ch}</span>`);
-  });
-  el("story-text").innerHTML = html;
+  el("story-text").innerHTML = highlightLearnedWords(data.story, state.entries);
 
   el("story-used").textContent = (data.used || []).length
-    ? `✅ Used: ${data.used.join("、")}`
+    ? `✅ AI intentionally used: ${data.used.join("、")}`
     : "";
   el("story-unused").textContent = (data.unused || []).length
     ? `Not included this time: ${data.unused.join("、")}`
