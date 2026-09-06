@@ -222,6 +222,96 @@ function handleGenerateSentence(req, res) {
   });
 }
 
+// Asks Claude for a short multi-sentence story that naturally weaves in as
+// many of the given words as it reasonably can. Left at low effort (cheap)
+// but with thinking left on (the default) rather than disabled — deciding
+// which of ~15-20 words fit together is a real constraint-satisfaction task,
+// unlike the single-word sentence generator above.
+async function generateReviewStory(words) {
+  const wordList = words.map((w) => `${w.char} (${w.pinyin})`).join(", ");
+
+  const message = await anthropic.messages.create({
+    model: "claude-opus-5",
+    max_tokens: 1000,
+    output_config: {
+      effort: "low",
+      format: {
+        type: "json_schema",
+        schema: {
+          type: "object",
+          properties: {
+            story: { type: "string" },
+            used: { type: "array", items: { type: "string" } },
+            unused: { type: "array", items: { type: "string" } },
+          },
+          required: ["story", "used", "unused"],
+          additionalProperties: false,
+        },
+      },
+    },
+    system:
+      "You write a short story (3 to 6 simple sentences) for a Mandarin Chinese beginner (HSK 1-3 level) that naturally uses as many of the given words/characters as you reasonably can. It's fine to leave out a few if they don't fit naturally — never force an awkward sentence just to include one. Reply with the story in Chinese characters only — no pinyin, no translation, no extra commentary. Also report exactly which of the given words actually appear in your story (used) and which you left out (unused), using the exact character(s) as given.",
+    messages: [
+      { role: "user", content: `Words to use: ${wordList}` },
+    ],
+  });
+
+  if (message.stop_reason === "refusal") {
+    throw new Error("the model declined to generate a story for this word list");
+  }
+
+  const textBlock = message.content.find((b) => b.type === "text");
+  if (!textBlock) throw new Error("no story returned");
+  const parsed = JSON.parse(textBlock.text);
+  if (!parsed.story) throw new Error("no story returned");
+  return {
+    story: parsed.story,
+    used: Array.isArray(parsed.used) ? parsed.used : [],
+    unused: Array.isArray(parsed.unused) ? parsed.unused : [],
+  };
+}
+
+function handleGenerateReviewStory(req, res) {
+  if (!anthropic) {
+    return sendJSON(res, 500, {
+      error: "ANTHROPIC_API_KEY is not set on the server — export it before running npm start",
+    });
+  }
+  let body = "";
+  req.on("data", (chunk) => {
+    body += chunk;
+    if (body.length > 5e4) req.destroy();
+  });
+  req.on("end", async () => {
+    let data;
+    try {
+      data = JSON.parse(body);
+    } catch {
+      return sendJSON(res, 400, { error: "invalid JSON" });
+    }
+
+    const words = Array.isArray(data.words) ? data.words : [];
+    const cleaned = words
+      .map((w) => ({
+        char: String((w && w.char) || "").trim(),
+        pinyin: String((w && w.pinyin) || "").trim(),
+      }))
+      .filter((w) => w.char && w.pinyin)
+      .slice(0, 60); // hard ceiling regardless of what the client sends
+
+    if (!cleaned.length) {
+      return sendJSON(res, 400, { error: "words (array of {char, pinyin}) is required" });
+    }
+
+    try {
+      const result = await generateReviewStory(cleaned);
+      sendJSON(res, 200, { ok: true, ...result });
+    } catch (err) {
+      sendJSON(res, 502, { error: err.message || "generation failed" });
+    }
+  });
+}
+
 function serveStatic(req, res) {
   const urlPath = decodeURIComponent(req.url.split("?")[0]);
   const relative = urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, "");
@@ -253,6 +343,9 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === "POST" && req.url === "/api/generate-sentence") {
     return handleGenerateSentence(req, res);
+  }
+  if (req.method === "POST" && req.url === "/api/generate-review-story") {
+    return handleGenerateReviewStory(req, res);
   }
   if (req.method === "GET") {
     return serveStatic(req, res);

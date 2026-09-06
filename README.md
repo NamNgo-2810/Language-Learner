@@ -36,7 +36,9 @@ cp env.example .env
 
 The **✨ Generate** button next to the sentence field on the "Add new characters" screen asks Claude to write a short example sentence for the character/pinyin you just typed. Set `ANTHROPIC_API_KEY` (see above) to enable it.
 
-Without the key set, everything else still works — you'll just see an error if you click Generate, and can type sentences by hand instead. Each generated sentence is a small, thinking-disabled, low-effort request to Claude Opus 5 — well under a cent per call. The key never touches the browser; it's only read server-side.
+The **Review Story** mode uses the same key to write a short story that reuses many of your words at once (see Quiz modes below).
+
+Without the key set, everything else still works — you'll just see an error if you click Generate, and can type sentences by hand instead. Both features are low-effort Claude Opus 5 requests (a single sentence is thinking-disabled and tiny; a review story leaves thinking on since it has to juggle ~15-20 words at once, but still stays at low effort) — each call costs a small fraction of a cent. The key never touches the browser; it's only read server-side.
 
 ## Login (Basic Auth)
 
@@ -94,6 +96,7 @@ You can edit the file directly, or use **+ Add new characters** in the app (on t
 - **Writing Practice** – see the pinyin only, write the character in your notebook, use **Hint** for a blurred peek at the character before **Show answer** reveals it fully, then self-rate. An optional **Show sentence hint** button gives a fill-in-the-blank sentence as an extra clue.
 - **Confusables** – only for characters that share a pinyin with at least one other character in your list (e.g. 是/事/世, all `shì`). Shows the pinyin (plus sentence, if one exists) and asks you to pick the right character from among its actual look-alikes, instead of random distractors.
 - **Sentence Practice** – shows one of your example sentences with the target word blanked out; you pick the character that fills the blank. Only includes words that have a sentence attached, so add some via the **+ Add new characters** screen to unlock it.
+- **Review Story** – asks Claude to write a short story (a few sentences) that naturally weaves in as many of your words as it can, using the same smart-prioritized word set as the quizzes (respects the **Study everything** toggle too — check it to try to use every word instead of the capped set). Shows which words made it in and which didn't, with **🔄 Regenerate** for a fresh attempt. Requires `ANTHROPIC_API_KEY` (see above).
 
 ## Smart prioritization
 

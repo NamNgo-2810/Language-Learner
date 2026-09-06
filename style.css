@@ -273,3 +273,24 @@ h2 { font-size: 1.15rem; margin: 0 0 4px; }
   color: #f0b429;
   margin: -4px 0 8px;
 }
+
+/* review story */
+
+.story-text {
+  font-size: 1.4rem;
+  line-height: 2;
+  text-align: left;
+  white-space: pre-wrap;
+}
+.story-text .target {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.story-meta {
+  text-align: left;
+  font-size: 0.9rem;
+  color: var(--subtle);
+  margin-top: 16px;
+  line-height: 1.6;
+}

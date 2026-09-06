@@ -60,6 +60,11 @@
         <span class="mode-name">Sentence Practice</span>
         <span class="mode-desc">Fill in the blank using the example sentence</span>
       </button>
+      <button class="mode-card" data-mode="story" id="mode-story">
+        <span class="mode-icon">📝</span>
+        <span class="mode-name">Review Story</span>
+        <span class="mode-desc">AI writes a short story using your vocabulary</span>
+      </button>
     </div>
     <label class="toggle-row">
       <input type="checkbox" id="study-all-toggle">
@@ -137,6 +142,21 @@
       </div>
     </div>
     <button class="link-btn" id="quit-quiz">&larr; quit</button>
+  </section>
+
+  <!-- Screen 3b: review story -->
+  <section id="screen-story" class="screen hidden">
+    <h2>Review Story</h2>
+    <p class="subtle" id="story-word-count"></p>
+    <div class="quiz-card">
+      <div id="story-text" class="story-text">Generating your story...</div>
+      <div id="story-used" class="story-meta"></div>
+      <div id="story-unused" class="story-meta"></div>
+    </div>
+    <div class="button-row">
+      <button class="primary-btn" id="regenerate-story-btn">🔄 Regenerate</button>
+      <button class="secondary-btn" id="back-from-story-btn">← back</button>
+    </div>
   </section>
 
   <!-- Screen 4: results -->

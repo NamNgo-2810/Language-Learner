@@ -19,6 +19,7 @@ const screens = {
   mode: el("screen-mode"),
   add: el("screen-add"),
   quiz: el("screen-quiz"),
+  story: el("screen-story"),
   results: el("screen-results"),
 };
 
@@ -218,12 +219,17 @@ function bindStaticEvents() {
   el("add-pinyin").addEventListener("input", updateConfusableWarning);
   el("add-char").addEventListener("input", updateConfusableWarning);
   el("generate-sentence-btn").addEventListener("click", generateSentenceForAdd);
+
+  el("regenerate-story-btn").addEventListener("click", generateReviewStory);
+  el("back-from-story-btn").addEventListener("click", () => showScreen("mode"));
 }
 
 // ---------- mode launch (filters the pool per mode, then starts the quiz) ----------
 
 function launchMode(mode) {
-  if (mode === "confusables") {
+  if (mode === "story") {
+    startReviewStory();
+  } else if (mode === "confusables") {
     const pool = confusableGroups(state.entries).flat();
     if (!pool.length) {
       alert("No confusable pairs found yet — add more characters that share a pinyin to unlock this mode.");
@@ -434,6 +440,85 @@ function answerWriting(known) {
   if (known) state.correctCount++;
   else state.missed.push(entry);
   advance();
+}
+
+// ---------- review story ----------
+
+// Same weighting/cap as quizzes: wrong + new + recent-session words, capped
+// unless "Study everything" is checked.
+function selectReviewWords() {
+  const studyAll = el("study-all-toggle").checked;
+  let words = weightedShuffle(state.entries);
+  if (!studyAll) words = words.slice(0, SESSION_CAP);
+  return words;
+}
+
+function escapeHtml(str) {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function startReviewStory() {
+  showScreen("story");
+  generateReviewStory();
+}
+
+async function generateReviewStory() {
+  const words = selectReviewWords();
+  const btn = el("regenerate-story-btn");
+  const textEl = el("story-text");
+  const usedEl = el("story-used");
+  const unusedEl = el("story-unused");
+
+  if (!words.length) {
+    textEl.textContent = "No words to build a story from yet — add some characters first.";
+    usedEl.textContent = "";
+    unusedEl.textContent = "";
+    el("story-word-count").textContent = "";
+    return;
+  }
+
+  el("story-word-count").textContent = `Using ${words.length} word${words.length === 1 ? "" : "s"} from your list`;
+  textEl.textContent = "Generating your story...";
+  usedEl.textContent = "";
+  unusedEl.textContent = "";
+  btn.disabled = true;
+
+  try {
+    const res = await fetch("/api/generate-review-story", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        languageId: state.currentLanguage.id,
+        words: words.map((w) => ({ char: w.char, pinyin: w.pinyin })),
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "generation failed");
+    renderReviewStory(data);
+  } catch (err) {
+    textEl.textContent = `Couldn't generate a story: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderReviewStory(data) {
+  let html = escapeHtml(data.story);
+  (data.used || []).forEach((ch) => {
+    if (!ch) return;
+    html = html.split(ch).join(`<span class="target">${ch}</span>`);
+  });
+  el("story-text").innerHTML = html;
+
+  el("story-used").textContent = (data.used || []).length
+    ? `✅ Used: ${data.used.join("、")}`
+    : "";
+  el("story-unused").textContent = (data.unused || []).length
+    ? `Not included this time: ${data.unused.join("、")}`
+    : "";
 }
 
 // ---------- add new characters ----------
