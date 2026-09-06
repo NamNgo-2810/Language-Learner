@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Language Learner</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <header>
+    <h1>语言 Learner</h1>
+    <div id="stats-badge" class="hidden"></div>
+  </header>
+
+  <!-- Screen 1: choose language -->
+  <section id="screen-language" class="screen">
+    <h2>Choose a language</h2>
+    <div id="language-list" class="card-list"></div>
+  </section>
+
+  <!-- Screen 2: choose quiz mode -->
+  <section id="screen-mode" class="screen hidden">
+    <h2 id="mode-lang-title"></h2>
+    <p class="subtle" id="mode-count"></p>
+    <div class="card-list">
+      <button class="mode-card" data-mode="flashcard">
+        <span class="mode-icon">🔁</span>
+        <span class="mode-name">Flashcards</span>
+        <span class="mode-desc">Reveal the pinyin, rate yourself</span>
+      </button>
+      <button class="mode-card" data-mode="mc-pinyin">
+        <span class="mode-icon">✅</span>
+        <span class="mode-name">Character → Pinyin</span>
+        <span class="mode-desc">Pick the correct pinyin</span>
+      </button>
+      <button class="mode-card" data-mode="mc-char">
+        <span class="mode-icon">🔤</span>
+        <span class="mode-name">Pinyin → Character</span>
+        <span class="mode-desc">Pick the correct character</span>
+      </button>
+      <button class="mode-card" data-mode="typing">
+        <span class="mode-icon">⌨️</span>
+        <span class="mode-name">Type the Pinyin</span>
+        <span class="mode-desc">Hardest mode, best for recall</span>
+      </button>
+      <button class="mode-card" data-mode="writing">
+        <span class="mode-icon">✍️</span>
+        <span class="mode-name">Writing Practice</span>
+        <span class="mode-desc">See the pinyin, write the character on paper</span>
+      </button>
+      <button class="mode-card" data-mode="confusables" id="mode-confusables">
+        <span class="mode-icon">🔀</span>
+        <span class="mode-name">Confusables</span>
+        <span class="mode-desc">Same pinyin, different character — tell them apart</span>
+      </button>
+      <button class="mode-card" data-mode="sentence" id="mode-sentence">
+        <span class="mode-icon">📖</span>
+        <span class="mode-name">Sentence Practice</span>
+        <span class="mode-desc">Fill in the blank using the example sentence</span>
+      </button>
+    </div>
+    <label class="toggle-row">
+      <input type="checkbox" id="study-all-toggle">
+      Study everything (skip smart prioritization / session cap)
+    </label>
+    <button class="link-btn" id="go-to-add">+ Add new characters</button>
+    <button class="link-btn" id="back-to-language">&larr; back</button>
+  </section>
+
+  <!-- Screen 2b: add new characters -->
+  <section id="screen-add" class="screen hidden">
+    <h2>Add characters to <span id="add-lang-name"></span></h2>
+    <p class="subtle">Each one is appended to the language's markdown file.</p>
+    <form id="add-form" class="add-form">
+      <input type="text" id="add-char" placeholder="character, e.g. 好" autocomplete="off">
+      <input type="text" id="add-pinyin" placeholder="pinyin, e.g. hǎo" autocomplete="off">
+      <div class="sentence-row">
+        <input type="text" id="add-sentence" placeholder="example sentence (optional), e.g. 你好吗？" autocomplete="off">
+        <button type="button" class="secondary-btn" id="generate-sentence-btn">✨ Generate</button>
+      </div>
+      <button type="submit" class="primary-btn">Add</button>
+    </form>
+    <div id="add-confusable-warning" class="hidden"></div>
+    <div id="add-feedback"></div>
+    <div id="add-recent" class="card-list"></div>
+    <button class="link-btn" id="back-to-modes-from-add">&larr; done adding</button>
+  </section>
+
+  <!-- Screen 3: quiz -->
+  <section id="screen-quiz" class="screen hidden">
+    <div class="quiz-progress">
+      <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+      <span id="progress-label"></span>
+    </div>
+
+    <div id="quiz-card" class="quiz-card">
+      <div class="prompt" id="quiz-prompt"></div>
+      <div class="subprompt hidden" id="quiz-subprompt"></div>
+
+      <!-- flashcard mode -->
+      <div id="flashcard-area" class="hidden">
+        <div class="answer-reveal" id="flashcard-answer"></div>
+        <div class="sentence-hint hidden" id="flashcard-sentence"></div>
+        <button id="flip-btn" class="primary-btn">Show answer</button>
+        <div id="flashcard-rate" class="hidden rate-row">
+          <button class="rate-btn wrong fc-rate-btn" data-know="0">😵 Didn't know</button>
+          <button class="rate-btn right fc-rate-btn" data-know="1">😄 Knew it</button>
+        </div>
+      </div>
+
+      <!-- multiple choice mode -->
+      <div id="mc-area" class="hidden option-grid"></div>
+
+      <!-- typing mode -->
+      <div id="typing-area" class="hidden">
+        <input type="text" id="typing-input" autocomplete="off" placeholder="type the pinyin, e.g. ni3 or nǐ">
+        <button id="typing-submit" class="primary-btn">Check</button>
+        <div id="typing-feedback"></div>
+      </div>
+
+      <!-- writing practice mode -->
+      <div id="writing-area" class="hidden">
+        <div class="hint-reveal hidden" id="writing-hint"></div>
+        <div class="rate-row" id="writing-controls">
+          <button id="hint-btn" class="secondary-btn">💡 Hint</button>
+          <button id="show-answer-btn" class="primary-btn">Show answer</button>
+        </div>
+        <div class="answer-reveal hidden" id="writing-answer"></div>
+        <div class="sentence-hint hidden" id="writing-sentence"></div>
+        <button class="link-btn hidden" id="writing-sentence-btn">📖 Show sentence hint</button>
+        <div class="hidden rate-row" id="writing-rate">
+          <button class="rate-btn wrong wr-rate-btn" data-know="0">😵 Got it wrong</button>
+          <button class="rate-btn right wr-rate-btn" data-know="1">😄 Got it right</button>
+        </div>
+      </div>
+    </div>
+    <button class="link-btn" id="quit-quiz">&larr; quit</button>
+  </section>
+
+  <!-- Screen 4: results -->
+  <section id="screen-results" class="screen hidden">
+    <h2>Results</h2>
+    <div id="results-summary"></div>
+    <div id="results-missed"></div>
+    <div class="button-row">
+      <button class="primary-btn" id="retry-missed">Retry missed</button>
+      <button class="secondary-btn" id="back-to-modes">Choose another mode</button>
+    </div>
+  </section>
+
+</div>
+<script src="app.js"></script>
+</body>
+</html>

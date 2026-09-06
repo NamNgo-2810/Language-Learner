@@ -1,0 +1,275 @@
+:root {
+  --bg: #0f1220;
+  --card: #1b1f33;
+  --card-hover: #262c48;
+  --text: #f1f3f9;
+  --subtle: #9aa1b8;
+  --accent: #6c8cff;
+  --good: #3ecf8e;
+  --bad: #ff6b6b;
+  --border: #2c3151;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+#app {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+h1 { font-size: 1.4rem; margin: 0; }
+h2 { font-size: 1.15rem; margin: 0 0 4px; }
+.subtle { color: var(--subtle); font-size: 0.9rem; margin: 0 0 16px; }
+
+.hidden { display: none !important; }
+
+.screen { animation: fadeIn 0.15s ease-out; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px);} to { opacity: 1; transform: none; } }
+
+.card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.lang-card, .mode-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 1rem;
+  transition: background 0.12s ease;
+}
+.lang-card:hover, .mode-card:hover { background: var(--card-hover); }
+
+.mode-card { flex-direction: column; align-items: flex-start; gap: 4px; }
+.mode-icon { font-size: 1.4rem; }
+.mode-name { font-weight: 600; }
+.mode-desc { color: var(--subtle); font-size: 0.85rem; }
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--subtle);
+  cursor: pointer;
+  margin-top: 20px;
+  font-size: 0.9rem;
+}
+.link-btn:hover { color: var(--text); }
+
+.quiz-progress { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
+.progress-track { flex: 1; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
+.progress-fill { height: 100%; background: var(--accent); width: 0%; transition: width 0.2s ease; }
+#progress-label { font-size: 0.85rem; color: var(--subtle); white-space: nowrap; }
+
+.quiz-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 32px 24px;
+  text-align: center;
+}
+
+.prompt {
+  font-size: 3rem;
+  margin-bottom: 24px;
+  word-break: break-word;
+}
+.prompt.pinyin-prompt { font-size: 2rem; }
+
+.answer-reveal {
+  font-size: 1.6rem;
+  color: var(--accent);
+  min-height: 2.2rem;
+  margin-bottom: 16px;
+}
+
+.primary-btn, .secondary-btn, .rate-btn {
+  border: none;
+  border-radius: 10px;
+  padding: 12px 20px;
+  font-size: 1rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+.primary-btn { background: var(--accent); color: white; }
+.secondary-btn { background: var(--border); color: var(--text); }
+.primary-btn:hover { filter: brightness(1.1); }
+
+.rate-row { display: flex; gap: 12px; justify-content: center; margin-top: 8px; }
+.rate-btn.wrong { background: var(--bad); color: white; }
+.rate-btn.right { background: var(--good); color: white; }
+
+.option-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.option-btn {
+  background: var(--border);
+  border: 2px solid transparent;
+  border-radius: 10px;
+  padding: 16px 8px;
+  font-size: 1.3rem;
+  color: var(--text);
+  cursor: pointer;
+}
+.option-btn:hover { border-color: var(--accent); }
+.option-btn.correct { background: var(--good); color: white; }
+.option-btn.incorrect { background: var(--bad); color: white; }
+.option-btn[disabled] { pointer-events: none; }
+
+#typing-area { display: flex; flex-direction: column; gap: 12px; align-items: center; }
+#typing-input {
+  width: 100%;
+  max-width: 300px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 1.1rem;
+  text-align: center;
+}
+#typing-feedback { font-size: 1rem; min-height: 1.4rem; }
+#typing-feedback.correct { color: var(--good); }
+#typing-feedback.incorrect { color: var(--bad); }
+
+.button-row { display: flex; gap: 12px; margin-top: 20px; }
+
+#results-summary { font-size: 1.1rem; margin: 16px 0; }
+#results-missed { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.missed-chip {
+  background: var(--card);
+  border: 1px solid var(--bad);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 0.95rem;
+}
+
+#stats-badge {
+  font-size: 0.85rem;
+  color: var(--subtle);
+}
+
+/* add characters screen */
+
+.add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+.add-form input {
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  font-size: 1.1rem;
+}
+
+.sentence-row {
+  display: flex;
+  gap: 8px;
+}
+.sentence-row input { flex: 1; min-width: 0; }
+.sentence-row .secondary-btn { white-space: nowrap; }
+
+#add-feedback {
+  min-height: 1.4rem;
+  margin: 10px 0;
+  font-size: 0.95rem;
+}
+#add-feedback.correct { color: var(--good); }
+#add-feedback.incorrect { color: var(--bad); }
+
+.added-row {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  display: flex;
+  justify-content: space-between;
+  font-size: 1rem;
+}
+.added-row .added-pinyin { color: var(--subtle); }
+
+/* writing practice */
+
+.hint-reveal {
+  font-size: 3rem;
+  margin-bottom: 16px;
+  filter: blur(7px);
+  user-select: none;
+  transition: filter 0.2s ease;
+}
+
+/* toggle row */
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  font-size: 0.9rem;
+  color: var(--subtle);
+  cursor: pointer;
+}
+.toggle-row input { accent-color: var(--accent); width: 16px; height: 16px; }
+
+/* subprompt / sentence context */
+
+.subprompt {
+  font-size: 1.1rem;
+  color: var(--subtle);
+  margin: -12px 0 20px;
+  line-height: 1.5;
+}
+.subprompt .blank {
+  display: inline-block;
+  min-width: 2em;
+  border-bottom: 2px solid var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sentence-hint {
+  font-size: 1rem;
+  color: var(--subtle);
+  margin: 8px 0 16px;
+  line-height: 1.5;
+}
+.sentence-hint .target {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+#add-confusable-warning {
+  font-size: 0.9rem;
+  color: #f0b429;
+  margin: -4px 0 8px;
+}
