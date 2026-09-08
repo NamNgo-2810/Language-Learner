@@ -148,15 +148,36 @@
   <section id="screen-story" class="screen hidden">
     <h2>Review Story</h2>
     <p class="subtle" id="story-word-count"></p>
+
+    <div class="story-controls">
+      <label class="story-control">
+        <span>Difficulty (HSK)</span>
+        <select id="story-hsk">
+          <option value="1">1 · easiest</option>
+          <option value="2">2</option>
+          <option value="3" selected>3</option>
+          <option value="4">4</option>
+          <option value="5">5</option>
+          <option value="6">6 · hardest</option>
+        </select>
+      </label>
+      <label class="story-control">
+        <span>Length (sentences)</span>
+        <input type="number" id="story-length" min="1" max="20" value="5">
+      </label>
+      <button class="primary-btn" id="generate-story-btn">✨ Generate</button>
+    </div>
+
     <div class="quiz-card">
-      <div id="story-text" class="story-text">Generating your story...</div>
-      <div id="story-used" class="story-meta"></div>
-      <div id="story-unused" class="story-meta"></div>
+      <div id="story-text" class="story-text">Choose a difficulty and length, then generate a story.</div>
+      <p class="subtle story-hint-text">Tip: right-click (or long-press) any character to see its pinyin.</p>
     </div>
     <div class="button-row">
-      <button class="primary-btn" id="regenerate-story-btn">🔄 Regenerate</button>
+      <button class="secondary-btn" id="speak-story-btn" disabled>🔊 Speak</button>
       <button class="secondary-btn" id="back-from-story-btn">← back</button>
     </div>
+
+    <div id="pinyin-popup" class="pinyin-popup hidden"></div>
   </section>
 
   <!-- Screen 4: results -->

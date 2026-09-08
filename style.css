@@ -291,6 +291,7 @@ h2 { font-size: 1.15rem; margin: 0 0 4px; }
   color: var(--accent);
   font-weight: 600;
 }
+.story-char { cursor: context-menu; }
 
 .story-meta {
   text-align: left;
@@ -298,4 +299,65 @@ h2 { font-size: 1.15rem; margin: 0 0 4px; }
   color: var(--subtle);
   margin-top: 16px;
   line-height: 1.6;
+}
+
+/* difficulty / length controls */
+.story-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin: 8px 0 16px;
+}
+.story-control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85rem;
+  color: var(--subtle);
+}
+.story-control select,
+.story-control input {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  font-size: 1rem;
+}
+.story-control input { width: 90px; }
+.story-controls .primary-btn { white-space: nowrap; }
+
+.story-hint-text {
+  font-size: 0.8rem;
+  margin: 14px 0 0;
+  text-align: left;
+}
+
+/* character being read aloud */
+.story-text .speaking {
+  background: var(--accent);
+  color: #fff;
+  border-radius: 3px;
+}
+
+/* right-click pinyin lookup popup */
+.pinyin-popup {
+  position: fixed;
+  z-index: 50;
+  transform: translate(-50%, -100%);
+  padding: 6px 12px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 1.1rem;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+.pinyin-popup .popup-char {
+  opacity: 0.8;
+  font-weight: 400;
+  margin-right: 6px;
 }

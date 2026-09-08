@@ -298,37 +298,36 @@ function handleGenerateSentence(req, res) {
   });
 }
 
-// Asks Claude for a short multi-sentence story that naturally weaves in as
-// many of the given words as it reasonably can. Left at low effort (cheap)
-// but with thinking left on (the default) rather than disabled — deciding
-// which of ~15-20 words fit together is a real constraint-satisfaction task,
-// unlike the single-word sentence generator above.
-async function generateReviewStory(words) {
+// Asks Claude for a story that weaves in the given vocabulary. Difficulty and
+// length are caller-controlled: `hskLevel` (1-6) sets the vocabulary/grammar
+// ceiling, `length` is the target number of sentences. Thinking is left on
+// (the default) since fitting many words together at a target level is a real
+// constraint-satisfaction task, unlike the single-word sentence generator.
+async function generateReviewStory(words, hskLevel, length) {
   const wordList = words.map((w) => `${w.char} (${w.pinyin})`).join(", ");
 
   const message = await anthropic.messages.create({
     model: "claude-opus-5",
-    max_tokens: 1000,
+    max_tokens: 2000,
     output_config: {
       effort: "low",
       format: {
         type: "json_schema",
         schema: {
           type: "object",
-          properties: {
-            story: { type: "string" },
-            used: { type: "array", items: { type: "string" } },
-            unused: { type: "array", items: { type: "string" } },
-          },
-          required: ["story", "used", "unused"],
+          properties: { story: { type: "string" } },
+          required: ["story"],
           additionalProperties: false,
         },
       },
     },
     system:
-      "You write a short story (3 to 6 simple sentences) for a Mandarin Chinese beginner (HSK 1-3 level) that naturally uses as many of the given words/characters as you reasonably can. It's fine to leave out a few if they don't fit naturally — never force an awkward sentence just to include one. Reply with the story in Chinese characters only — no pinyin, no translation, no extra commentary. Also report exactly which of the given words actually appear in your story (used) and which you left out (unused), using the exact character(s) as given.",
+      `You write a short story in Mandarin Chinese at approximately HSK level ${hskLevel} (on the 1-6 scale, where 1 is absolute beginner and 6 is advanced) — keep the vocabulary and grammar at or below that level. ` +
+      `Aim for about ${length} sentence${length === 1 ? "" : "s"}. ` +
+      "Naturally weave in as many of the learner's vocabulary words as fit comfortably at that level — you don't have to use all of them, and you may freely use other words the story needs. Never force an awkward sentence just to include a word. " +
+      "Reply with the story in Chinese characters only — no pinyin, no translation, no extra commentary.",
     messages: [
-      { role: "user", content: `Words to use: ${wordList}` },
+      { role: "user", content: `The learner's vocabulary words: ${wordList}` },
     ],
   });
 
@@ -340,11 +339,7 @@ async function generateReviewStory(words) {
   if (!textBlock) throw new Error("no story returned");
   const parsed = JSON.parse(textBlock.text);
   if (!parsed.story) throw new Error("no story returned");
-  return {
-    story: parsed.story,
-    used: Array.isArray(parsed.used) ? parsed.used : [],
-    unused: Array.isArray(parsed.unused) ? parsed.unused : [],
-  };
+  return { story: parsed.story };
 }
 
 function handleGenerateReviewStory(req, res) {
@@ -356,7 +351,7 @@ function handleGenerateReviewStory(req, res) {
   let body = "";
   req.on("data", (chunk) => {
     body += chunk;
-    if (body.length > 5e4) req.destroy();
+    if (body.length > 2e5) req.destroy();
   });
   req.on("end", async () => {
     let data;
@@ -372,15 +367,18 @@ function handleGenerateReviewStory(req, res) {
         char: String((w && w.char) || "").trim(),
         pinyin: String((w && w.pinyin) || "").trim(),
       }))
-      .filter((w) => w.char && w.pinyin)
-      .slice(0, 60); // hard ceiling regardless of what the client sends
+      .filter((w) => w.char && w.pinyin);
 
     if (!cleaned.length) {
       return sendJSON(res, 400, { error: "words (array of {char, pinyin}) is required" });
     }
 
+    // Difficulty controls, clamped to sane ranges regardless of client input.
+    const hskLevel = Math.min(6, Math.max(1, Math.round(Number(data.hskLevel) || 3)));
+    const length = Math.min(20, Math.max(1, Math.round(Number(data.length) || 5)));
+
     try {
-      const result = await generateReviewStory(cleaned);
+      const result = await generateReviewStory(cleaned, hskLevel, length);
       sendJSON(res, 200, { ok: true, ...result });
     } catch (err) {
       sendJSON(res, 502, { error: err.message || "generation failed" });

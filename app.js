@@ -232,8 +232,14 @@ function bindStaticEvents() {
   el("add-char").addEventListener("input", autoFillPinyin);
   el("generate-sentence-btn").addEventListener("click", generateSentenceForAdd);
 
-  el("regenerate-story-btn").addEventListener("click", generateReviewStory);
-  el("back-from-story-btn").addEventListener("click", () => showScreen("mode"));
+  el("generate-story-btn").addEventListener("click", generateReviewStory);
+  el("speak-story-btn").addEventListener("click", toggleSpeakStory);
+  el("back-from-story-btn").addEventListener("click", () => {
+    stopSpeaking();
+    showScreen("mode");
+  });
+
+  bindStoryPinyinLookup();
 }
 
 // ---------- mode launch (filters the pool per mode, then starts the quiz) ----------
@@ -456,15 +462,6 @@ function answerWriting(known) {
 
 // ---------- review story ----------
 
-// Same weighting/cap as quizzes: wrong + new + recent-session words, capped
-// unless "Study everything" is checked.
-function selectReviewWords() {
-  const studyAll = el("study-all-toggle").checked;
-  let words = weightedShuffle(state.entries);
-  if (!studyAll) words = words.slice(0, SESSION_CAP);
-  return words;
-}
-
 function escapeHtml(str) {
   return str
     .replace(/&/g, "&amp;")
@@ -472,30 +469,37 @@ function escapeHtml(str) {
     .replace(/>/g, "&gt;");
 }
 
+// Holds the plain text of the current story so TTS can read it and so the
+// speak-along highlighter can map spoken character offsets back to the DOM.
+let currentStoryText = "";
+
 function startReviewStory() {
+  stopSpeaking();
+  currentStoryText = "";
+  el("speak-story-btn").disabled = true;
+  el("story-text").textContent = "Choose a difficulty and length, then generate a story.";
+  el("story-word-count").textContent = state.entries.length
+    ? `${state.entries.length} word${state.entries.length === 1 ? "" : "s"} in your list to draw from`
+    : "";
   showScreen("story");
-  generateReviewStory();
 }
 
 async function generateReviewStory() {
-  const words = selectReviewWords();
-  const btn = el("regenerate-story-btn");
+  stopSpeaking();
+  const words = state.entries; // no cap — the whole list is fair game
+  const btn = el("generate-story-btn");
   const textEl = el("story-text");
-  const usedEl = el("story-used");
-  const unusedEl = el("story-unused");
 
   if (!words.length) {
     textEl.textContent = "No words to build a story from yet — add some characters first.";
-    usedEl.textContent = "";
-    unusedEl.textContent = "";
-    el("story-word-count").textContent = "";
     return;
   }
 
-  el("story-word-count").textContent = `Using ${words.length} word${words.length === 1 ? "" : "s"} from your list`;
+  const hskLevel = Number(el("story-hsk").value) || 3;
+  const length = Number(el("story-length").value) || 5;
+
   textEl.textContent = "Generating your story...";
-  usedEl.textContent = "";
-  unusedEl.textContent = "";
+  el("speak-story-btn").disabled = true;
   btn.disabled = true;
 
   try {
@@ -505,11 +509,13 @@ async function generateReviewStory() {
       body: JSON.stringify({
         languageId: state.currentLanguage.id,
         words: words.map((w) => ({ char: w.char, pinyin: w.pinyin })),
+        hskLevel,
+        length,
       }),
     });
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || "generation failed");
-    renderReviewStory(data);
+    renderReviewStory(data.story);
   } catch (err) {
     textEl.textContent = `Couldn't generate a story: ${err.message}`;
   } finally {
@@ -517,33 +523,188 @@ async function generateReviewStory() {
   }
 }
 
-// Highlights every word from the whole vocabulary (not just the ones the AI
-// says it intentionally used) that actually appears in the text. Longest
-// words are matched first so a multi-character word wins over a shorter
-// word that happens to be one of its characters.
-function highlightLearnedWords(text, entries) {
-  const words = [...new Set(entries.map((e) => e.char).filter(Boolean))].sort(
-    (a, b) => b.length - a.length
-  );
-  const escaped = escapeHtml(text);
-  if (!words.length) return escaped;
+// Renders the story one character per <span> so we can (a) highlight words the
+// learner has in their vocabulary, and (b) support right-click pinyin lookup
+// and speak-along highlighting on any character, learned or not.
+function renderReviewStory(story) {
+  currentStoryText = story;
+  const learned = new Set(state.entries.map((e) => e.char).filter((c) => c && c.length === 1));
+  // Also collect multi-character learned words to mark their characters.
+  const learnedMulti = state.entries.map((e) => e.char).filter((c) => c && c.length > 1);
 
-  const pattern = new RegExp(
-    `(${words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`,
-    "g"
-  );
-  return escaped.replace(pattern, '<span class="target">$1</span>');
+  const container = el("story-text");
+  container.innerHTML = "";
+
+  const chars = [...story];
+  chars.forEach((ch, i) => {
+    const span = document.createElement("span");
+    span.className = "story-char";
+    span.dataset.index = String(i);
+    span.textContent = ch;
+    if (learned.has(ch)) span.classList.add("target");
+    container.appendChild(span);
+  });
+
+  // Mark characters that are part of a learned multi-character word.
+  learnedMulti.forEach((word) => {
+    let from = 0;
+    let idx;
+    while ((idx = story.indexOf(word, from)) !== -1) {
+      for (let k = 0; k < [...word].length; k++) {
+        const span = container.querySelector(`.story-char[data-index="${idx + k}"]`);
+        if (span) span.classList.add("target");
+      }
+      from = idx + word.length;
+    }
+  });
+
+  el("speak-story-btn").disabled = !story;
 }
 
-function renderReviewStory(data) {
-  el("story-text").innerHTML = highlightLearnedWords(data.story, state.entries);
+// ---------- story text-to-speech ----------
 
-  el("story-used").textContent = (data.used || []).length
-    ? `✅ AI intentionally used: ${data.used.join("、")}`
-    : "";
-  el("story-unused").textContent = (data.unused || []).length
-    ? `Not included this time: ${data.unused.join("、")}`
-    : "";
+const speechSupported = typeof window !== "undefined" && "speechSynthesis" in window;
+
+// Picks the best available Mandarin voice, if the browser has one.
+function pickChineseVoice() {
+  if (!speechSupported) return null;
+  const voices = window.speechSynthesis.getVoices();
+  return (
+    voices.find((v) => /^zh(-|_)?(cn|hans)?/i.test(v.lang)) ||
+    voices.find((v) => /^zh/i.test(v.lang)) ||
+    null
+  );
+}
+
+function clearSpeakingHighlight() {
+  document.querySelectorAll(".story-char.speaking").forEach((s) => s.classList.remove("speaking"));
+}
+
+function stopSpeaking() {
+  if (speechSupported) window.speechSynthesis.cancel();
+  clearSpeakingHighlight();
+  const btn = el("speak-story-btn");
+  if (btn) btn.textContent = "🔊 Speak";
+}
+
+function toggleSpeakStory() {
+  if (!speechSupported) {
+    alert("Your browser doesn't support speech synthesis.");
+    return;
+  }
+  // If already speaking, treat the button as Stop.
+  if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+    stopSpeaking();
+    return;
+  }
+  if (!currentStoryText) return;
+
+  const utter = new SpeechSynthesisUtterance(currentStoryText);
+  utter.lang = "zh-CN";
+  const voice = pickChineseVoice();
+  if (voice) utter.voice = voice;
+  utter.rate = 0.9;
+
+  // Highlight the character currently being spoken (where the browser reports
+  // boundary events — support varies, so this is a best-effort nicety).
+  utter.onboundary = (e) => {
+    if (typeof e.charIndex !== "number") return;
+    clearSpeakingHighlight();
+    const span = el("story-text").querySelector(`.story-char[data-index="${e.charIndex}"]`);
+    if (span) span.classList.add("speaking");
+  };
+  utter.onend = stopSpeaking;
+  utter.onerror = stopSpeaking;
+
+  el("speak-story-btn").textContent = "⏹ Stop";
+  window.speechSynthesis.speak(utter);
+}
+
+// Some browsers load voices asynchronously; nudge the list to populate.
+if (speechSupported) {
+  window.speechSynthesis.onvoiceschanged = () => {};
+}
+
+// ---------- right-click pinyin lookup on story text ----------
+
+let pinyinPopupTimer = null;
+
+function hidePinyinPopup() {
+  const popup = el("pinyin-popup");
+  popup.classList.add("hidden");
+  popup.innerHTML = "";
+}
+
+async function showPinyinPopupFor(text, x, y) {
+  const clean = String(text || "").trim();
+  if (!clean) return;
+
+  const popup = el("pinyin-popup");
+  popup.style.left = `${x}px`;
+  popup.style.top = `${y}px`;
+  popup.innerHTML = `<span class="popup-char">${escapeHtml(clean)}</span>…`;
+  popup.classList.remove("hidden");
+
+  if (pinyinPopupTimer) clearTimeout(pinyinPopupTimer);
+
+  try {
+    const res = await fetch("/api/pinyin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ char: clean }),
+    });
+    const data = await res.json();
+    if (res.ok && data.ok && data.pinyin) {
+      popup.innerHTML = `<span class="popup-char">${escapeHtml(clean)}</span>${escapeHtml(data.pinyin)}`;
+    } else {
+      popup.innerHTML = `<span class="popup-char">${escapeHtml(clean)}</span>?`;
+    }
+  } catch {
+    popup.innerHTML = `<span class="popup-char">${escapeHtml(clean)}</span>?`;
+  }
+
+  // Auto-dismiss after a few seconds.
+  pinyinPopupTimer = setTimeout(hidePinyinPopup, 3500);
+}
+
+function bindStoryPinyinLookup() {
+  const container = el("story-text");
+
+  // Right-click a character (or a text selection) to look up its pinyin.
+  container.addEventListener("contextmenu", (e) => {
+    const selection = String(window.getSelection ? window.getSelection().toString() : "").trim();
+    let target = selection;
+    if (!target && e.target.classList && e.target.classList.contains("story-char")) {
+      target = e.target.textContent;
+    }
+    if (!target) return; // let the normal menu show if there's nothing to look up
+    e.preventDefault();
+    showPinyinPopupFor(target, e.clientX, e.clientY);
+  });
+
+  // Long-press support for touch devices (no right-click there).
+  let touchTimer = null;
+  container.addEventListener(
+    "touchstart",
+    (e) => {
+      const t = e.target;
+      if (!(t.classList && t.classList.contains("story-char"))) return;
+      const touch = e.touches[0];
+      touchTimer = setTimeout(() => {
+        showPinyinPopupFor(t.textContent, touch.clientX, touch.clientY);
+      }, 450);
+    },
+    { passive: true }
+  );
+  const cancelTouch = () => {
+    if (touchTimer) clearTimeout(touchTimer);
+  };
+  container.addEventListener("touchend", cancelTouch);
+  container.addEventListener("touchmove", cancelTouch);
+
+  // Dismiss the popup on any click/scroll elsewhere.
+  document.addEventListener("click", hidePinyinPopup);
+  document.addEventListener("scroll", hidePinyinPopup, true);
 }
 
 // ---------- add new characters ----------
