@@ -129,8 +129,15 @@ function confusablesFor(entry, entries) {
 // ---------- init ----------
 
 async function init() {
-  const res = await fetch("languages.json");
-  state.languages = await res.json();
+  try {
+    const res = await fetch("/api/languages");
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "could not load languages");
+    state.languages = data.languages;
+  } catch (err) {
+    state.languages = [];
+    console.error("Failed to load languages:", err);
+  }
   renderLanguageList();
   showScreen("language");
   bindStaticEvents();
@@ -149,10 +156,16 @@ function renderLanguageList() {
 }
 
 async function selectLanguage(lang) {
-  const res = await fetch(lang.file);
-  const raw = await res.text();
   state.currentLanguage = lang;
-  state.entries = parseEntries(raw);
+  try {
+    const res = await fetch(`/api/words?languageId=${encodeURIComponent(lang.id)}`);
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "could not load words");
+    state.entries = data.entries || [];
+  } catch (err) {
+    state.entries = [];
+    alert(`Couldn't load words for ${lang.name}: ${err.message}`);
+  }
   refreshModeScreen();
   showScreen("mode");
 }
@@ -216,8 +229,7 @@ function bindStaticEvents() {
     e.preventDefault();
     submitNewCharacter();
   });
-  el("add-pinyin").addEventListener("input", updateConfusableWarning);
-  el("add-char").addEventListener("input", updateConfusableWarning);
+  el("add-char").addEventListener("input", autoFillPinyin);
   el("generate-sentence-btn").addEventListener("click", generateSentenceForAdd);
 
   el("regenerate-story-btn").addEventListener("click", generateReviewStory);
@@ -536,6 +548,45 @@ function renderReviewStory(data) {
 
 // ---------- add new characters ----------
 
+// Auto-generates pinyin from the character field via the server (pinyin-pro).
+// Debounced so we're not firing a request on every keystroke. The pinyin
+// field is read-only in the UI — this is the only thing that fills it.
+let pinyinDebounce = null;
+function autoFillPinyin() {
+  const char = el("add-char").value.trim();
+  const pinyinField = el("add-pinyin");
+
+  if (pinyinDebounce) clearTimeout(pinyinDebounce);
+
+  if (!char) {
+    pinyinField.value = "";
+    updateConfusableWarning();
+    return;
+  }
+
+  pinyinField.value = "…";
+  pinyinDebounce = setTimeout(async () => {
+    try {
+      const res = await fetch("/api/pinyin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ char }),
+      });
+      const data = await res.json();
+      // Ignore if the character field changed while we were waiting.
+      if (el("add-char").value.trim() !== char) return;
+      if (res.ok && data.ok) {
+        pinyinField.value = data.pinyin || "";
+      } else {
+        pinyinField.value = "";
+      }
+    } catch {
+      if (el("add-char").value.trim() === char) pinyinField.value = "";
+    }
+    updateConfusableWarning();
+  }, 250);
+}
+
 function updateConfusableWarning() {
   const pinyin = el("add-pinyin").value.trim();
   const warning = el("add-confusable-warning");
@@ -596,11 +647,10 @@ async function submitNewCharacter() {
   const sentenceInput = el("add-sentence");
   const feedback = el("add-feedback");
   const char = charInput.value.trim();
-  const pinyin = pinyinInput.value.trim();
   const sentence = sentenceInput.value.trim();
 
-  if (!char || !pinyin) {
-    feedback.textContent = "Enter both a character and its pinyin.";
+  if (!char) {
+    feedback.textContent = "Enter a character.";
     feedback.className = "incorrect";
     return;
   }
@@ -609,13 +659,16 @@ async function submitNewCharacter() {
   feedback.className = "";
 
   try {
+    // Pinyin is generated server-side from the character; no need to send it.
     const res = await fetch("/api/add-word", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ languageId: state.currentLanguage.id, char, pinyin, sentence: sentence || undefined }),
+      body: JSON.stringify({ languageId: state.currentLanguage.id, char, sentence: sentence || undefined }),
     });
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || "save failed");
+
+    const pinyin = data.pinyin || pinyinInput.value.trim();
 
     state.entries.push({
       char,

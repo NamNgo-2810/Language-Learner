@@ -5,6 +5,8 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const Anthropic = require("@anthropic-ai/sdk");
+const sheets = require("./sheets");
+const { toPinyin } = require("./pinyin");
 
 const ROOT = __dirname;
 const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
@@ -71,46 +73,115 @@ function todayLabel() {
   return new Date().toISOString().slice(0, 10);
 }
 
-// Appends "char pinyin" (optionally "| sentence") to the file, opening a new
-// "## YYYY-MM-DD" session header if the file's last header isn't today's.
-function appendEntry(filePath, char, pinyin, sentence) {
-  let content = "";
-  try {
-    content = fs.readFileSync(filePath, "utf8");
-  } catch {
-    content = "";
-  }
-
-  const headerRegex = /^##\s+(.+)$/gm;
-  let lastHeader = null;
-  let match;
-  while ((match = headerRegex.exec(content))) {
-    lastHeader = match[1].trim();
-  }
-
-  const today = todayLabel();
-  const newSession = lastHeader !== today;
-
-  let toAppend = "";
-  if (content.length > 0 && !content.endsWith("\n")) toAppend += "\n";
-  if (newSession) {
-    if (content.trim().length > 0) toAppend += "\n";
-    toAppend += `## ${today}\n`;
-  }
-  const line = sentence ? `${char} ${pinyin} | ${sentence}` : `${char} ${pinyin}`;
-  toAppend += `${line}\n`;
-
-  fs.appendFileSync(filePath, toAppend);
-  return { newSession, sessionLabel: today };
+// Resolves the spreadsheet ID for a language. An env var can override the value
+// in languages.json so credentials/IDs stay out of the committed file:
+//   GOOGLE_SHEET_ID_<UPPERCASE_LANGUAGE_ID>  (e.g. GOOGLE_SHEET_ID_MANDARIN)
+//   GOOGLE_SHEET_ID                          (fallback for a single-language setup)
+// Returns null if nothing usable is configured (placeholder counts as unset).
+function resolveSheetId(lang) {
+  const perLang = process.env[`GOOGLE_SHEET_ID_${lang.id.toUpperCase()}`];
+  const generic = process.env.GOOGLE_SHEET_ID;
+  const candidate = (perLang || generic || lang.sheetId || "").trim();
+  if (!candidate || candidate === "PASTE_YOUR_GOOGLE_SHEET_ID_HERE") return null;
+  return candidate;
 }
 
+// Looks up a language by id and resolves its sheet target. Returns
+// { lang, sheetId, tab } or an { error, status } object to send back.
+function resolveLanguageTarget(languageId) {
+  let languages;
+  try {
+    languages = loadLanguages();
+  } catch {
+    return { error: "could not read languages.json", status: 500 };
+  }
+  const lang = languages.find((l) => l.id === languageId);
+  if (!lang) return { error: "unknown language", status: 404 };
+
+  const sheetId = resolveSheetId(lang);
+  if (!sheetId) {
+    return {
+      error: `no Google Sheet configured for "${languageId}" — set its sheetId in languages.json or a GOOGLE_SHEET_ID env var`,
+      status: 500,
+    };
+  }
+  return { lang, sheetId, tab: lang.tab || lang.id };
+}
+
+// GET /api/languages — the language picker list, without exposing sheet IDs.
+function handleGetLanguages(req, res) {
+  let languages;
+  try {
+    languages = loadLanguages();
+  } catch {
+    return sendJSON(res, 500, { error: "could not read languages.json" });
+  }
+  const list = languages.map((l) => ({ id: l.id, name: l.name }));
+  sendJSON(res, 200, { ok: true, languages: list });
+}
+
+// GET /api/words?languageId=xxx — returns the language's words from its sheet
+// as parsed entries: [{ char, pinyin, sentence, sessionIndex, sessionLabel }].
+function handleGetWords(req, res, query) {
+  if (!sheets.isConfigured()) {
+    return sendJSON(res, 500, {
+      error: "Google Sheets credentials are not set on the server — see README (GOOGLE_SERVICE_ACCOUNT_JSON)",
+    });
+  }
+  const languageId = String(query.get("languageId") || "");
+  if (!languageId) return sendJSON(res, 400, { error: "languageId is required" });
+
+  const target = resolveLanguageTarget(languageId);
+  if (target.error) return sendJSON(res, target.status, { error: target.error });
+
+  sheets
+    .readEntries(target.sheetId, target.tab)
+    .then((entries) => sendJSON(res, 200, { ok: true, entries }))
+    .catch((err) => sendJSON(res, 502, { error: err.message || "could not read sheet" }));
+}
+
+// POST /api/pinyin { char } — converts a character/word to tone-marked pinyin.
+// Pure/local (no network), so it works even without Sheets configured.
+function handlePinyin(req, res) {
+  let body = "";
+  req.on("data", (chunk) => {
+    body += chunk;
+    if (body.length > 1e4) req.destroy();
+  });
+  req.on("end", () => {
+    let data;
+    try {
+      data = JSON.parse(body);
+    } catch {
+      return sendJSON(res, 400, { error: "invalid JSON" });
+    }
+    const char = String(data.char || "").trim();
+    if (!char) return sendJSON(res, 400, { error: "char is required" });
+    try {
+      const pinyin = toPinyin(char);
+      sendJSON(res, 200, { ok: true, pinyin });
+    } catch (err) {
+      sendJSON(res, 500, { error: err.message || "pinyin conversion failed" });
+    }
+  });
+}
+
+// POST /api/add-word { languageId, char, sentence? } — appends a row to the
+// language's sheet. Pinyin is generated automatically from the character
+// server-side; a client-supplied `pinyin` is accepted only as a fallback if
+// auto-conversion yields nothing.
 function handleAddWord(req, res) {
+  if (!sheets.isConfigured()) {
+    return sendJSON(res, 500, {
+      error: "Google Sheets credentials are not set on the server — see README (GOOGLE_SERVICE_ACCOUNT_JSON)",
+    });
+  }
   let body = "";
   req.on("data", (chunk) => {
     body += chunk;
     if (body.length > 1e5) req.destroy();
   });
-  req.on("end", () => {
+  req.on("end", async () => {
     let data;
     try {
       data = JSON.parse(body);
@@ -120,31 +191,36 @@ function handleAddWord(req, res) {
 
     const languageId = String(data.languageId || "");
     const char = String(data.char || "").replace(/[\r\n\t]/g, "").trim();
-    const pinyin = String(data.pinyin || "").replace(/[\r\n\t]/g, "").trim();
-    const sentence = String(data.sentence || "").replace(/[\r\n\t|]/g, "").trim();
+    const sentence = String(data.sentence || "").replace(/[\r\n\t]/g, "").trim();
 
-    if (!languageId || !char || !pinyin) {
-      return sendJSON(res, 400, { error: "languageId, char and pinyin are required" });
+    if (!languageId || !char) {
+      return sendJSON(res, 400, { error: "languageId and char are required" });
     }
 
-    let languages;
-    try {
-      languages = loadLanguages();
-    } catch {
-      return sendJSON(res, 500, { error: "could not read languages.json" });
+    // Auto-generate pinyin; fall back to a client-provided value if the
+    // converter produced nothing (e.g. a non-Han input).
+    let pinyin = toPinyin(char);
+    if (!pinyin) pinyin = String(data.pinyin || "").replace(/[\r\n\t]/g, "").trim();
+    if (!pinyin) {
+      return sendJSON(res, 422, { error: "could not derive pinyin for that input" });
     }
 
-    const lang = languages.find((l) => l.id === languageId);
-    if (!lang) return sendJSON(res, 404, { error: "unknown language" });
-
-    const filePath = path.join(ROOT, lang.file);
-    if (!filePath.startsWith(ROOT)) return sendJSON(res, 400, { error: "invalid file" });
+    const target = resolveLanguageTarget(languageId);
+    if (target.error) return sendJSON(res, target.status, { error: target.error });
 
     try {
-      const { newSession, sessionLabel } = appendEntry(filePath, char, pinyin, sentence);
-      sendJSON(res, 200, { ok: true, newSession, sessionLabel });
-    } catch {
-      sendJSON(res, 500, { error: "write failed" });
+      const today = todayLabel();
+      const last = await sheets.lastSessionLabel(target.sheetId, target.tab);
+      const newSession = last !== today;
+      await sheets.appendEntry(target.sheetId, target.tab, {
+        char,
+        pinyin,
+        sentence,
+        session: today,
+      });
+      sendJSON(res, 200, { ok: true, char, pinyin, newSession, sessionLabel: today });
+    } catch (err) {
+      sendJSON(res, 502, { error: err.message || "write failed" });
     }
   });
 }
@@ -312,6 +388,11 @@ function handleGenerateReviewStory(req, res) {
   });
 }
 
+// Files that must never be served to the browser: server-side config and any
+// credentials. Word data now lives in Google Sheets, so the old .md files (if
+// still present) and languages.json are no longer client-fetched.
+const BLOCKED_STATIC = new Set(["languages.json", "package.json", "package-lock.json", ".env"]);
+
 function serveStatic(req, res) {
   const urlPath = decodeURIComponent(req.url.split("?")[0]);
   const relative = urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, "");
@@ -320,6 +401,14 @@ function serveStatic(req, res) {
   if (!filePath.startsWith(ROOT)) {
     res.writeHead(403);
     return res.end("forbidden");
+  }
+
+  const base = path.basename(filePath).toLowerCase();
+  const ext = path.extname(filePath).toLowerCase();
+  // Block config/credential files and any service-account key JSON.
+  if (BLOCKED_STATIC.has(base) || ext === ".md" || base.includes("service-account") || base.includes("credentials")) {
+    res.writeHead(404);
+    return res.end("not found");
   }
 
   fs.readFile(filePath, (err, data) => {
@@ -338,13 +427,25 @@ const server = http.createServer((req, res) => {
     return res.end("Authentication required");
   }
 
-  if (req.method === "POST" && req.url === "/api/add-word") {
+  const parsedUrl = new URL(req.url, "http://localhost");
+  const pathname = parsedUrl.pathname;
+
+  if (req.method === "GET" && pathname === "/api/languages") {
+    return handleGetLanguages(req, res);
+  }
+  if (req.method === "GET" && pathname === "/api/words") {
+    return handleGetWords(req, res, parsedUrl.searchParams);
+  }
+  if (req.method === "POST" && pathname === "/api/pinyin") {
+    return handlePinyin(req, res);
+  }
+  if (req.method === "POST" && pathname === "/api/add-word") {
     return handleAddWord(req, res);
   }
-  if (req.method === "POST" && req.url === "/api/generate-sentence") {
+  if (req.method === "POST" && pathname === "/api/generate-sentence") {
     return handleGenerateSentence(req, res);
   }
-  if (req.method === "POST" && req.url === "/api/generate-review-story") {
+  if (req.method === "POST" && pathname === "/api/generate-review-story") {
     return handleGenerateReviewStory(req, res);
   }
   if (req.method === "GET") {
@@ -358,6 +459,13 @@ if (!process.env.APP_USERNAME || !process.env.APP_PASSWORD) {
   console.warn(
     "WARNING: APP_USERNAME / APP_PASSWORD not set — the app is running with no login. " +
     "Fine for local-only use; set both before deploying anywhere reachable from the internet."
+  );
+}
+
+if (!sheets.isConfigured()) {
+  console.warn(
+    "WARNING: Google Sheets credentials not set (GOOGLE_SERVICE_ACCOUNT_JSON or " +
+    "GOOGLE_SERVICE_ACCOUNT_FILE) — loading and adding words will fail until they're set. See README."
   );
 }
 

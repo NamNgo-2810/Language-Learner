@@ -4,10 +4,13 @@
   "private": true,
   "description": "Flashcard/quiz app for learning vocabulary from markdown word lists",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "migrate": "node migrate-to-sheet.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",
-    "dotenv": "^17.4.2"
+    "dotenv": "^17.4.2",
+    "googleapis": "^144.0.0",
+    "pinyin-pro": "^3.26.0"
   }
 }

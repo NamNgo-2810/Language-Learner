@@ -1,3 +1,9 @@
 [
-  { "id": "mandarin", "name": "Mandarin Chinese", "file": "mandarin.md" }
+  {
+    "id": "mandarin",
+    "name": "Mandarin Chinese",
+    "sheetId": "PASTE_YOUR_GOOGLE_SHEET_ID_HERE",
+    "tab": "mandarin",
+    "legacyFile": "mandarin.md"
+  }
 ]

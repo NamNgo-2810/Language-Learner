@@ -191,6 +191,11 @@ h2 { font-size: 1.15rem; margin: 0 0 4px; }
   color: var(--text);
   font-size: 1.1rem;
 }
+/* auto-filled pinyin field — visually distinct so it reads as generated, not typed */
+.add-form input[readonly] {
+  opacity: 0.75;
+  cursor: default;
+}
 
 .sentence-row {
   display: flex;

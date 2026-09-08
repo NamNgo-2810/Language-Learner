@@ -77,10 +77,10 @@
   <!-- Screen 2b: add new characters -->
   <section id="screen-add" class="screen hidden">
     <h2>Add characters to <span id="add-lang-name"></span></h2>
-    <p class="subtle">Each one is appended to the language's markdown file.</p>
+    <p class="subtle">Each one is saved as a new row in the language's Google Sheet. Pinyin is filled in automatically.</p>
     <form id="add-form" class="add-form">
       <input type="text" id="add-char" placeholder="character, e.g. 好" autocomplete="off">
-      <input type="text" id="add-pinyin" placeholder="pinyin, e.g. hǎo" autocomplete="off">
+      <input type="text" id="add-pinyin" placeholder="pinyin (auto-filled)" autocomplete="off" readonly>
       <div class="sentence-row">
         <input type="text" id="add-sentence" placeholder="example sentence (optional), e.g. 你好吗？" autocomplete="off">
         <button type="button" class="secondary-btn" id="generate-sentence-btn">✨ Generate</button>

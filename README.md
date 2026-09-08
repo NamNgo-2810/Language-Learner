@@ -11,7 +11,9 @@ npm start
 
 then open http://localhost:8080
 
-This runs a small Node server (`server.js`) that both serves the app and handles saving new characters — opening `index.html` directly from disk won't work.
+This runs a small Node server (`server.js`) that both serves the app and handles reading/saving words in a Google Sheet — opening `index.html` directly from disk won't work.
+
+Words are stored in **Google Sheets** (one worksheet per language), not in markdown files anymore. You'll need to do the one-time [Google Sheets setup](#google-sheets-setup) below before words will load or save. Pinyin is generated automatically from the character you type (via `pinyin-pro`), so you never type it by hand.
 
 ## Where to put secrets (API key, login)
 
@@ -21,6 +23,8 @@ The server reads three optional environment variables — never put any of these
 |---|---|
 | `ANTHROPIC_API_KEY` | Enables the **✨ Generate** sentence button |
 | `APP_USERNAME` / `APP_PASSWORD` | Login for the deployed app (see below) — leave both unset for local-only use |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` *or* `GOOGLE_SERVICE_ACCOUNT_FILE` | Google service-account key used to read/write the sheet (see [Google Sheets setup](#google-sheets-setup)) |
+| `GOOGLE_SHEET_ID` (or `GOOGLE_SHEET_ID_<LANGID>`) | Which spreadsheet to use — optional if you put the id in `languages.json` |
 
 **Locally:** copy `env.example` to `.env` and fill in your values:
 
@@ -31,6 +35,34 @@ cp env.example .env
 `.env` is already in `.gitignore`, is loaded automatically on `npm start` (via the `dotenv` package), and never leaves your machine.
 
 **When deployed:** set the same variables in your host's dashboard as environment variables/secrets (see the Render steps below) — not in a file at all. The server only ever reads them from `process.env`; they're never sent to the browser.
+
+## Google Sheets setup
+
+Words live in a Google Sheet, and the server talks to it through a **service account** (a robot Google identity — no interactive login, works great on a server). One-time setup:
+
+1. **Create the spreadsheet.** In Google Sheets, make a new blank sheet. Rename the first tab to match your language id — `mandarin` for the default. The app writes a header row (`char`, `pinyin`, `sentence`, `session`) automatically on first use, so you can leave it empty. Grab the **spreadsheet ID** from the URL — it's the long string between `/d/` and `/edit`:
+   ```
+   https://docs.google.com/spreadsheets/d/THIS_IS_THE_ID/edit
+   ```
+2. **Create a Google Cloud project + service account.**
+   - Go to the [Google Cloud Console](https://console.cloud.google.com/), create (or pick) a project.
+   - Enable the **Google Sheets API** for it (APIs & Services → Library → search "Google Sheets API" → Enable).
+   - APIs & Services → Credentials → **Create credentials → Service account**. Give it any name; no roles are needed.
+   - Open the new service account → **Keys** tab → **Add key → Create new key → JSON**. A `.json` key file downloads. Keep it safe — it's a credential.
+3. **Share the sheet with the service account.** Open the key file and copy the `client_email` value (looks like `something@your-project.iam.gserviceaccount.com`). In your Google Sheet, click **Share** and give that email **Editor** access. This is what lets the robot read and write your sheet.
+4. **Point the app at the sheet.** Either:
+   - put the ID in `languages.json` (`"sheetId": "THE_ID"`), **or**
+   - set `GOOGLE_SHEET_ID=THE_ID` in your `.env` / host env (this overrides `languages.json`).
+5. **Give the app the credentials.** Either:
+   - **locally:** save the key file in the project as `service-account.json` (it's gitignored) and set `GOOGLE_SERVICE_ACCOUNT_FILE=./service-account.json`, **or**
+   - **anywhere:** set `GOOGLE_SERVICE_ACCOUNT_JSON` to the entire contents of the key file (one line). This is the best option for hosts like Render where you can't upload a file.
+6. **Migrate your existing words (optional, one-time).** If you already have words in `mandarin.md`, push them into the sheet:
+   ```
+   npm run migrate
+   ```
+   It parses the old markdown (keeping example sentences and session dates) and appends every word as a row. It refuses to run if the tab already has data, so you won't double up — pass `npm run migrate -- --force` only if you really mean to. After migrating you can delete `mandarin.md` (keep the `legacyFile` line in `languages.json` if you might want to re-run migration).
+
+That's it — start the server and your words load from the sheet. Adding a word from the app writes a new row; today's date goes in the `session` column so the app still knows which words are newest.
 
 ## AI-generated example sentences (optional)
 
@@ -62,31 +94,34 @@ Render's free web service tier works well for this: it's a normal always-on Node
 3. When prompted for environment variables, fill in `ANTHROPIC_API_KEY`, `APP_USERNAME`, and `APP_PASSWORD` (see above). These are entered directly in Render's dashboard, encrypted at rest — never in your repo.
 4. Deploy. Render gives you a URL like `https://learn-languages-xxxx.onrender.com` — that's your app, reachable from anywhere, behind your login.
 
-**Two free-tier caveats worth knowing:**
+Set `GOOGLE_SERVICE_ACCOUNT_JSON` (the full key file contents, one line) and `GOOGLE_SHEET_ID` in Render's dashboard alongside the other variables. Because words now live in Google Sheets, there's no local-file persistence to worry about — the old "redeploys reset your words" caveat is gone. Adding words on the live site writes straight to your sheet.
+
+**One free-tier caveat worth knowing:**
 - The free instance spins down after ~15 minutes of inactivity and takes a few seconds to wake up on the next visit — normal, not a bug.
-- Render's free tier doesn't include a persistent disk *across redeploys* — words you add via the app stick around through normal restarts/sleep-wake, but a fresh deploy (e.g. after you `git push` a code change) resets `mandarin.md` to whatever's in the repo. If you've added a lot of words on the live site, periodically copy them back into your local `mandarin.md` and commit, so a future deploy doesn't lose them. (If you outgrow this, Render's paid persistent disk, or Fly.io's free volumes, remove the caveat entirely — ask if you want that set up instead.)
 
 ## Add words
 
-Each language is a plain markdown file, one entry per line: `char pinyin`, optionally followed by `| an example sentence`:
+Each language is a worksheet (tab) in your Google Sheet, one word per row across four columns:
 
-```
-你 nǐ
-好 hǎo
-事 shì | 这是一件小事。
-```
+| char | pinyin | sentence | session |
+|---|---|---|---|
+| 你 | nǐ | | 2026-09-06 |
+| 事 | shì | 这是一件小事。 | 2026-09-06 |
 
-An optional `## label` line (the app uses today's date, e.g. `## 2026-09-06`) marks the start of a new class session — this is how the app knows which words are newest.
+The `session` column holds a date (`YYYY-MM-DD`) — all rows sharing a date are one class session, which is how the app knows which words are newest.
 
-You can edit the file directly, or use **+ Add new characters** in the app (on the mode-select screen) to type in new character/pinyin/sentence — they're appended to the file automatically through the running server, which opens a new dated session header for you if one doesn't already exist for today.
+You can add words two ways:
+- **In the app:** use **+ Add new characters** on the mode-select screen. Type the character; the **pinyin fills in automatically** and you can optionally add an example sentence. On save it's written as a new row with today's date in `session`.
+- **Directly in the sheet:** add rows by hand. You can leave `pinyin` blank and fill it later, but the app expects both `char` and `pinyin` to show a word, so it's easiest to add words through the app and let it generate the pinyin.
 
 ## Add a new language
 
-1. Create `yourlanguage.md` in the same format.
+1. Add a new tab to your spreadsheet named after the language id (e.g. `japanese`).
 2. Add it to `languages.json`:
    ```json
-   { "id": "japanese", "name": "Japanese", "file": "japanese.md" }
+   { "id": "japanese", "name": "Japanese", "sheetId": "SPREADSHEET_ID", "tab": "japanese" }
    ```
+   (`sheetId` is optional if you set a `GOOGLE_SHEET_ID` env var; multiple languages can share one spreadsheet using different `tab` names.)
 
 ## Quiz modes
 

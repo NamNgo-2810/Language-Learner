@@ -12,3 +12,9 @@ services:
         sync: false
       - key: APP_PASSWORD
         sync: false
+      # Paste the full service-account key JSON as the value (single line).
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      # The spreadsheet ID (from the sheet URL). Or set it in languages.json.
+      - key: GOOGLE_SHEET_ID
+        sync: false
