@@ -92,8 +92,6 @@ async function migrateLanguage(lang, { force }) {
     return;
   }
 
-  await sheets.ensureHeader(sheetId, tab);
-
   const existing = await sheets.countDataRows(sheetId, tab);
   if (existing > 0 && !force) {
     console.error(

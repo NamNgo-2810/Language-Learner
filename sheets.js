@@ -1,13 +1,15 @@
 // Google Sheets data-access layer.
 //
 // Replaces the old markdown-file storage. Each language maps to one worksheet
-// (tab) inside a spreadsheet, with a header row and one word per row:
+// (tab) inside a spreadsheet, one word per row. There is no header row.
 //
-//   char | pinyin | sentence | session
+// Two row layouts coexist on the same tab and are both read as words:
+//   - native : char=A, pinyin=B, sentence=C, session=D   (written by this app)
+//   - form   : char=D, pinyin=E, timestamp=G             (e.g. a linked Google Form)
 //
-// The `session` column (a YYYY-MM-DD date) replaces the old "## date" markdown
-// headers — it's how the app figures out which words are newest. All rows that
-// share the same session value belong to the same class session.
+// The session value (a YYYY-MM-DD date, or the date part of a timestamp)
+// replaces the old "## date" markdown headers — it's how the app figures out
+// which words are newest. Rows sharing a session value are one class session.
 //
 // Auth: a Google service account. Set GOOGLE_SERVICE_ACCOUNT_JSON to the full
 // JSON of the service-account key (or GOOGLE_SERVICE_ACCOUNT_FILE to a path).
@@ -17,7 +19,6 @@ const fs = require("fs");
 const { google } = require("googleapis");
 
 const SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
-const HEADER = ["char", "pinyin", "sentence", "session"];
 
 let sheetsClientPromise = null;
 
@@ -79,14 +80,66 @@ function quoteTab(tab) {
   return `'${String(tab).replace(/'/g, "''")}'`;
 }
 
+// The sheet has accumulated two row layouts over time (no header row):
+//   - "native"  : char=A, pinyin=B, sentence=C, session=D  (written by this app)
+//   - "form"    : char=D, pinyin=E, sentence=(none), timestamp=G
+//                 (e.g. words added via a linked Google Form)
+// normalizeRow figures out which layout a given row is and returns a common
+// { char, pinyin, sentence, session } shape, or null if the row has no word.
+//
+// A1-notation date-like timestamps (e.g. a full "2026-09-08 14:03:22") are
+// trimmed to just the YYYY-MM-DD part so both layouts group into sessions the
+// same way.
+function sessionFromCell(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  // Pull a leading YYYY-MM-DD if present (handles both bare dates and full
+  // timestamps like "2026-09-08 14:03:22" or "2026-09-08T14:03:22Z").
+  const match = raw.match(/^\d{4}-\d{2}-\d{2}/);
+  return match ? match[0] : raw;
+}
+
+function normalizeRow(row) {
+  const col = (i) => String((row && row[i]) || "").trim();
+
+  // Native layout: char in column A.
+  if (col(0)) {
+    const char = col(0);
+    const pinyin = col(1);
+    if (!char || !pinyin) return null;
+    return {
+      char,
+      pinyin,
+      sentence: col(2) || null,
+      session: sessionFromCell(col(3)),
+    };
+  }
+
+  // Form layout: char in column D, pinyin in E, timestamp in G.
+  if (col(3)) {
+    const char = col(3);
+    const pinyin = col(4);
+    if (!char || !pinyin) return null;
+    return {
+      char,
+      pinyin,
+      sentence: col(5) || null, // tolerate an optional sentence in column F
+      session: sessionFromCell(col(6)),
+    };
+  }
+
+  return null;
+}
+
 // Reads every word row for a language's tab and returns entries in the same
 // shape the client already expects from the old markdown parser:
 //   { char, pinyin, sentence, sessionIndex, sessionLabel }
-// sessionIndex is assigned in the order sessions (dates) first appear, matching
-// how the old parser numbered "## date" headers top-to-bottom.
+// Handles both the native (A-D) and form (D/E/G) row layouts on the same tab.
+// sessionIndex is assigned in the order sessions (dates) first appear.
 async function readEntries(spreadsheetId, tab) {
   const sheets = await getSheetsClient();
-  const range = `${quoteTab(tab)}!A2:D`; // skip the header row
+  // Read A:G so both layouts (char in A, or char in D + timestamp in G) are covered.
+  const range = `${quoteTab(tab)}!A:G`;
   const res = await sheets.spreadsheets.values.get({ spreadsheetId, range });
   const rows = res.data.values || [];
 
@@ -94,35 +147,35 @@ async function readEntries(spreadsheetId, tab) {
   const entries = [];
 
   for (const row of rows) {
-    const char = String(row[0] || "").trim();
-    const pinyin = String(row[1] || "").trim();
-    if (!char || !pinyin) continue; // skip blank/incomplete rows
-    const sentence = String(row[2] || "").trim() || null;
-    const sessionLabel = String(row[3] || "").trim() || null;
+    const norm = normalizeRow(row);
+    if (!norm) continue; // blank row, header-ish row, or incomplete word
 
+    const sessionLabel = norm.session;
     let sessionIndex = -1;
     if (sessionLabel !== null) {
       if (!sessionOrder.has(sessionLabel)) sessionOrder.set(sessionLabel, sessionOrder.size);
       sessionIndex = sessionOrder.get(sessionLabel);
     }
 
-    entries.push({ char, pinyin, sentence, sessionIndex, sessionLabel });
+    entries.push({
+      char: norm.char,
+      pinyin: norm.pinyin,
+      sentence: norm.sentence,
+      sessionIndex,
+      sessionLabel,
+    });
   }
 
   return entries;
 }
 
 // Returns the session label (date) of the most recently added row, or null if
-// the sheet has no data rows yet. Used to decide whether adding a word today
-// starts a new session.
+// the sheet has no words yet. Uses the same dual-layout normalization as
+// readEntries so it's correct whichever format the last row is in.
 async function lastSessionLabel(spreadsheetId, tab) {
-  const sheets = await getSheetsClient();
-  const range = `${quoteTab(tab)}!D2:D`;
-  const res = await sheets.spreadsheets.values.get({ spreadsheetId, range });
-  const rows = res.data.values || [];
-  for (let i = rows.length - 1; i >= 0; i--) {
-    const label = String((rows[i] && rows[i][0]) || "").trim();
-    if (label) return label;
+  const entries = await readEntries(spreadsheetId, tab);
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (entries[i].sessionLabel) return entries[i].sessionLabel;
   }
   return null;
 }
@@ -154,33 +207,11 @@ async function appendEntries(spreadsheetId, tab, rows) {
   });
 }
 
-// Returns the number of existing data rows (excluding the header). Used by the
+// Returns the number of existing word rows (either layout). Used by the
 // migration script to avoid double-importing into a sheet that already has data.
 async function countDataRows(spreadsheetId, tab) {
-  const sheets = await getSheetsClient();
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${quoteTab(tab)}!A2:A`,
-  });
-  return (res.data.values || []).filter((r) => String((r && r[0]) || "").trim()).length;
-}
-
-// Ensures row 1 of the tab is the expected header. Safe to call repeatedly;
-// only writes if the header is missing or different. Used by the migration
-// script and can be called on first write.
-async function ensureHeader(spreadsheetId, tab) {
-  const sheets = await getSheetsClient();
-  const range = `${quoteTab(tab)}!A1:D1`;
-  const res = await sheets.spreadsheets.values.get({ spreadsheetId, range });
-  const existing = (res.data.values && res.data.values[0]) || [];
-  const matches = HEADER.every((h, i) => String(existing[i] || "").trim().toLowerCase() === h);
-  if (matches) return;
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range,
-    valueInputOption: "RAW",
-    requestBody: { values: [HEADER] },
-  });
+  const entries = await readEntries(spreadsheetId, tab);
+  return entries.length;
 }
 
 module.exports = {
@@ -190,6 +221,4 @@ module.exports = {
   appendEntry,
   appendEntries,
   countDataRows,
-  ensureHeader,
-  HEADER,
 };
