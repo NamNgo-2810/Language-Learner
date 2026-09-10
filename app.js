@@ -42,29 +42,71 @@ function saveStats(stats) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(stats));
 }
 
-function recordResult(languageId, char, known) {
+// How fast a "fluent" recall is (ms) vs. a "struggling" one. Answers at or
+// under FAST_MS count as fully fast; at or over SLOW_MS as fully slow; linear
+// in between. Tuned for typing tone-marked/numbered pinyin.
+const FAST_MS = 2500;
+const SLOW_MS = 12000;
+
+// Records a quiz result. `elapsedMs` (optional) is how long a *correct* typed
+// answer took; it feeds a running average (EMA) used for the remembering score
+// and to resurface slow-but-correct words. Old records ({seen,wrong}) upgrade
+// transparently.
+function recordResult(languageId, char, known, elapsedMs) {
   const stats = loadStats();
   stats[languageId] = stats[languageId] || {};
   const rec = stats[languageId][char] || { seen: 0, wrong: 0 };
   rec.seen += 1;
   if (!known) rec.wrong += 1;
+
+  if (typeof elapsedMs === "number" && isFinite(elapsedMs) && elapsedMs > 0) {
+    const clamped = Math.min(elapsedMs, 60000); // ignore afk-long outliers
+    // Exponential moving average so recent speed matters more than ancient reps.
+    rec.avgMs = rec.avgMs ? Math.round(rec.avgMs * 0.6 + clamped * 0.4) : Math.round(clamped);
+    rec.timedReps = (rec.timedReps || 0) + 1;
+  }
+
+  rec.lastSeen = Date.now();
   stats[languageId][char] = rec;
   saveStats(stats);
 }
 
-// weight favors words you've gotten wrong before, words never quizzed yet,
-// and words from the most recent class session(s)
-function computeWeight(entry, maxSessionIndex) {
+// 0 (fast) .. 1 (slow) from an average response time; 0 if never timed.
+function slownessFactor(rec) {
+  if (!rec || !rec.avgMs) return 0;
+  const t = (rec.avgMs - FAST_MS) / (SLOW_MS - FAST_MS);
+  return Math.max(0, Math.min(1, t));
+}
+
+// A 0-100 "how well do I remember this" score, combining accuracy and speed.
+// Returns null for words with no quiz history so the UI can show "new".
+function rememberingLevel(rec) {
+  if (!rec || !rec.seen) return null;
+  const accuracy = (rec.seen - rec.wrong) / rec.seen; // 0..1
+  const speed = 1 - slownessFactor(rec); // 1 fast .. 0 slow
+  // If we have timing, weight accuracy 60% / speed 40%; otherwise accuracy only.
+  const score = rec.avgMs ? accuracy * 0.6 + speed * 0.4 : accuracy;
+  return Math.round(score * 100);
+}
+
+function statFor(char) {
   const stats = loadStats();
-  const rec = stats[state.currentLanguage.id] && stats[state.currentLanguage.id][entry.char];
+  return (stats[state.currentLanguage.id] && stats[state.currentLanguage.id][char]) || null;
+}
+
+// weight favors words you've gotten wrong before, words never quizzed yet,
+// words you're slow to recall, and words from the most recent class session(s)
+function computeWeight(entry, maxSessionIndex) {
+  const rec = statFor(entry.char);
   const wrongBoost = rec ? rec.wrong * 3 : 0;
   const unseenBoost = rec ? 0 : 2;
+  const slowBoost = rec ? slownessFactor(rec) * 3 : 0; // slow-but-correct resurfaces
   let recencyBoost = 0;
   if (entry.sessionIndex >= 0 && maxSessionIndex >= 0) {
     if (entry.sessionIndex === maxSessionIndex) recencyBoost = 4;
     else if (entry.sessionIndex === maxSessionIndex - 1) recencyBoost = 2;
   }
-  return 1 + wrongBoost + unseenBoost + recencyBoost;
+  return 1 + wrongBoost + unseenBoost + slowBoost + recencyBoost;
 }
 
 // ---------- parsing ----------
@@ -204,6 +246,10 @@ function bindStaticEvents() {
     btn.addEventListener("click", () => answerWriting(btn.dataset.know === "1"));
   });
 
+  el("dnd-check-btn").addEventListener("click", checkSentenceOrder);
+  el("dnd-reset-btn").addEventListener("click", resetSentenceBuilder);
+  el("dnd-next-btn").addEventListener("click", advance);
+
   el("retry-missed").addEventListener("click", () => {
     const missed = state.missed.map((e) => e);
     beginQuiz(state.mode, missed, { skipCap: true });
@@ -233,6 +279,7 @@ function bindStaticEvents() {
   el("generate-sentence-btn").addEventListener("click", generateSentenceForAdd);
 
   el("generate-story-btn").addEventListener("click", generateReviewStory);
+  el("story-format").addEventListener("change", updateStoryLengthLabel);
   el("speak-story-btn").addEventListener("click", toggleSpeakStory);
   el("back-from-story-btn").addEventListener("click", () => {
     stopSpeaking();
@@ -255,12 +302,11 @@ function launchMode(mode) {
     }
     beginQuiz(mode, pool);
   } else if (mode === "sentence") {
-    const pool = state.entries.filter((e) => e.sentence);
-    if (!pool.length) {
-      alert("No example sentences yet — add one when creating a character (or edit mandarin.md) to unlock this mode.");
+    if (!state.entries.length) {
+      alert("No words yet — add some characters first.");
       return;
     }
-    beginQuiz(mode, pool);
+    beginQuiz(mode, state.entries);
   } else {
     beginQuiz(mode, state.entries);
   }
@@ -340,7 +386,12 @@ function renderQuestion() {
   el("mc-area").classList.add("hidden");
   el("typing-area").classList.add("hidden");
   el("writing-area").classList.add("hidden");
+  el("dragdrop-area").classList.add("hidden");
   setSubprompt(null);
+
+  // Timestamp used to measure how long the learner takes to answer (used by the
+  // typing mode's timing-based remembering score).
+  state.questionStart = Date.now();
 
   if (state.mode === "flashcard") {
     el("quiz-prompt").className = "prompt";
@@ -382,15 +433,9 @@ function renderQuestion() {
     el("hint-btn").disabled = false;
     el("writing-rate").classList.add("hidden");
   } else if (state.mode === "confusables") {
-    el("quiz-prompt").className = "prompt pinyin-prompt";
-    el("quiz-prompt").textContent = entry.pinyin;
-    if (entry.sentence) setSubprompt(sentenceBlankHTML(entry));
-    renderMultipleChoice(entry, "char", confusablesFor(entry, state.entries));
+    renderConfusableContext(entry);
   } else if (state.mode === "sentence") {
-    el("quiz-prompt").className = "prompt pinyin-prompt";
-    el("quiz-prompt").innerHTML = sentenceBlankHTML(entry);
-    setSubprompt(entry.pinyin);
-    renderMultipleChoice(entry, "char", confusablesFor(entry, state.entries));
+    renderSentenceBuilder(entry);
   }
 }
 
@@ -484,6 +529,13 @@ function startReviewStory() {
   showScreen("story");
 }
 
+// Keeps the length control's label in sync with the chosen format.
+function updateStoryLengthLabel() {
+  const format = el("story-format").value;
+  el("story-length-label").textContent =
+    format === "conversation" ? "Length (lines)" : "Length (sentences)";
+}
+
 async function generateReviewStory() {
   stopSpeaking();
   const words = state.entries; // no cap — the whole list is fair game
@@ -497,8 +549,9 @@ async function generateReviewStory() {
 
   const hskLevel = Number(el("story-hsk").value) || 3;
   const length = Number(el("story-length").value) || 5;
+  const format = el("story-format").value === "conversation" ? "conversation" : "story";
 
-  textEl.textContent = "Generating your story...";
+  textEl.textContent = format === "conversation" ? "Generating your conversation..." : "Generating your story...";
   el("speak-story-btn").disabled = true;
   btn.disabled = true;
 
@@ -511,6 +564,7 @@ async function generateReviewStory() {
         words: words.map((w) => ({ char: w.char, pinyin: w.pinyin })),
         hskLevel,
         length,
+        format,
       }),
     });
     const data = await res.json();
@@ -909,18 +963,276 @@ function choose(btn, chosen, correct, entry) {
   setTimeout(advance, 700);
 }
 
+// ---------- confusables (pick the right character for the pinyin context) ----------
+
+// Fetches an AI sentence whose pinyin is shown with the target word blanked out,
+// then asks the learner to pick the character that fits — choices are the
+// same-pinyin confusables. Falls back to the plain pinyin prompt if the AI call
+// fails, so the mode still works offline / without an API key.
+async function renderConfusableContext(entry) {
+  const token = ++currentQuestionToken;
+  el("quiz-prompt").className = "prompt pinyin-prompt";
+  el("quiz-prompt").textContent = "…";
+  setSubprompt("Loading a sentence…");
+  el("mc-area").classList.add("hidden");
+
+  let pinyinContext = null;
+  try {
+    const res = await fetch("/api/generate-confusable-context", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ char: entry.char, pinyin: entry.pinyin }),
+    });
+    const data = await res.json();
+    if (res.ok && data.ok) pinyinContext = data.pinyinContext;
+  } catch {
+    // ignore — fall back below
+  }
+
+  // A newer question started while we were waiting; abandon this render.
+  if (token !== currentQuestionToken) return;
+
+  if (pinyinContext) {
+    el("quiz-prompt").className = "prompt pinyin-context";
+    el("quiz-prompt").textContent = pinyinContext;
+    setSubprompt("Which character fills the blank (＿)?");
+  } else {
+    // Fallback: no context sentence available.
+    el("quiz-prompt").className = "prompt pinyin-prompt";
+    el("quiz-prompt").textContent = entry.pinyin;
+    setSubprompt("Pick the matching character");
+  }
+  renderMultipleChoice(entry, "char", confusablesFor(entry, state.entries));
+}
+
+// ---------- sentence builder (drag the shuffled words into order) ----------
+
+// Per-question token so a slow AI response for a previous question doesn't
+// overwrite the current one after the learner advances.
+let currentQuestionToken = 0;
+
+// Holds the correct chunk order for the current sentence-builder question.
+let dndCorrect = [];
+
+async function renderSentenceBuilder(entry) {
+  const token = ++currentQuestionToken;
+  el("dragdrop-area").classList.remove("hidden");
+  el("quiz-prompt").className = "prompt";
+  el("quiz-prompt").textContent = entry.char;
+
+  el("dnd-status").textContent = "Generating a sentence…";
+  el("dnd-slots").innerHTML = "";
+  el("dnd-bank").innerHTML = "";
+  el("dnd-feedback").textContent = "";
+  el("dnd-feedback").className = "";
+  el("dnd-answer").classList.add("hidden");
+  el("dnd-answer").innerHTML = "";
+  el("dnd-next-btn").classList.add("hidden");
+  el("dnd-check-btn").classList.remove("hidden");
+  el("dnd-reset-btn").classList.remove("hidden");
+  el("dnd-check-btn").disabled = true;
+
+  let sentence = null;
+  let chunks = null;
+  try {
+    const res = await fetch("/api/generate-practice-sentence", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ char: entry.char, pinyin: entry.pinyin }),
+    });
+    const data = await res.json();
+    if (res.ok && data.ok) {
+      sentence = data.sentence;
+      chunks = data.chunks;
+    }
+  } catch {
+    // ignore — handled below
+  }
+
+  if (token !== currentQuestionToken) return;
+
+  if (!sentence || !Array.isArray(chunks) || chunks.length < 2) {
+    el("dnd-status").textContent = "Couldn't generate a sentence for this word — skipping.";
+    el("dnd-check-btn").classList.add("hidden");
+    el("dnd-reset-btn").classList.add("hidden");
+    el("dnd-next-btn").classList.remove("hidden");
+    return;
+  }
+
+  dndCorrect = chunks.slice();
+  el("dnd-status").textContent = `Arrange the words to use 「${entry.char}」 in a sentence:`;
+  buildDndUI(chunks);
+}
+
+// Builds the drop-slots (one per chunk) and the shuffled word bank.
+function buildDndUI(chunks) {
+  const slots = el("dnd-slots");
+  const bank = el("dnd-bank");
+  slots.innerHTML = "";
+  bank.innerHTML = "";
+
+  // One empty slot per chunk.
+  chunks.forEach((_, i) => {
+    const slot = document.createElement("div");
+    slot.className = "dnd-slot";
+    slot.dataset.slot = String(i);
+    bindSlotDrop(slot);
+    slots.appendChild(slot);
+  });
+
+  // Shuffled chips in the bank. Keep shuffling until it isn't already correct
+  // (unless there's no other arrangement).
+  let order = shuffle(chunks.map((_, i) => i));
+  let guard = 0;
+  while (order.every((v, i) => v === i) && chunks.length > 1 && guard++ < 10) {
+    order = shuffle(chunks.map((_, i) => i));
+  }
+  order.forEach((idx) => {
+    bank.appendChild(makeChip(chunks[idx], idx));
+  });
+
+  bindBankDrop(bank);
+  updateDndCheckState();
+}
+
+function makeChip(text, idx) {
+  const chip = document.createElement("div");
+  chip.className = "dnd-chip";
+  chip.textContent = text;
+  chip.draggable = true;
+  chip.dataset.idx = String(idx);
+  chip.dataset.text = text;
+
+  chip.addEventListener("dragstart", (e) => {
+    chip.classList.add("dragging");
+    e.dataTransfer.setData("text/plain", chip.dataset.idx);
+    e.dataTransfer.effectAllowed = "move";
+  });
+  chip.addEventListener("dragend", () => chip.classList.remove("dragging"));
+
+  // Touch support: tap a chip to place it in the first empty slot; tap a placed
+  // chip to send it back to the bank.
+  chip.addEventListener("click", () => onChipTap(chip));
+
+  return chip;
+}
+
+function onChipTap(chip) {
+  const inSlot = chip.parentElement && chip.parentElement.classList.contains("dnd-slot");
+  if (inSlot) {
+    el("dnd-bank").appendChild(chip);
+  } else {
+    const emptySlot = [...el("dnd-slots").children].find((s) => !s.querySelector(".dnd-chip"));
+    if (emptySlot) emptySlot.appendChild(chip);
+  }
+  updateDndCheckState();
+}
+
+function bindSlotDrop(slot) {
+  slot.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    slot.classList.add("drop-hover");
+  });
+  slot.addEventListener("dragleave", () => slot.classList.remove("drop-hover"));
+  slot.addEventListener("drop", (e) => {
+    e.preventDefault();
+    slot.classList.remove("drop-hover");
+    const idx = e.dataTransfer.getData("text/plain");
+    const chip = el("dragdrop-area").querySelector(`.dnd-chip[data-idx="${idx}"]`);
+    if (!chip) return;
+    // If the slot already holds a chip, swap it back to the bank.
+    const existing = slot.querySelector(".dnd-chip");
+    if (existing && existing !== chip) el("dnd-bank").appendChild(existing);
+    slot.appendChild(chip);
+    updateDndCheckState();
+  });
+}
+
+function bindBankDrop(bank) {
+  bank.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    bank.classList.add("drop-hover");
+  });
+  bank.addEventListener("dragleave", () => bank.classList.remove("drop-hover"));
+  bank.addEventListener("drop", (e) => {
+    e.preventDefault();
+    bank.classList.remove("drop-hover");
+    const idx = e.dataTransfer.getData("text/plain");
+    const chip = el("dragdrop-area").querySelector(`.dnd-chip[data-idx="${idx}"]`);
+    if (chip) bank.appendChild(chip);
+    updateDndCheckState();
+  });
+}
+
+// The check button is enabled only once every slot is filled.
+function updateDndCheckState() {
+  const slots = [...el("dnd-slots").children];
+  const allFilled = slots.every((s) => s.querySelector(".dnd-chip"));
+  el("dnd-check-btn").disabled = !allFilled;
+}
+
+function resetSentenceBuilder() {
+  const bank = el("dnd-bank");
+  el("dragdrop-area").querySelectorAll(".dnd-slot .dnd-chip").forEach((chip) => bank.appendChild(chip));
+  el("dnd-feedback").textContent = "";
+  el("dnd-feedback").className = "";
+  updateDndCheckState();
+}
+
+function checkSentenceOrder() {
+  const slots = [...el("dnd-slots").children];
+  const assembled = slots.map((s) => {
+    const chip = s.querySelector(".dnd-chip");
+    return chip ? chip.dataset.text : "";
+  });
+  const known = assembled.join("") === dndCorrect.join("");
+  const entry = currentEntry();
+
+  slots.forEach((s, i) => {
+    const chip = s.querySelector(".dnd-chip");
+    if (!chip) return;
+    chip.classList.toggle("correct", chip.dataset.text === dndCorrect[i]);
+    chip.classList.toggle("incorrect", chip.dataset.text !== dndCorrect[i]);
+  });
+
+  const feedback = el("dnd-feedback");
+  feedback.textContent = known ? "Correct!" : "Not quite — see the answer below.";
+  feedback.className = known ? "correct" : "incorrect";
+
+  el("dnd-answer").innerHTML = `<span class="dnd-answer-label">Answer:</span> ${escapeHtml(dndCorrect.join(""))}`;
+  el("dnd-answer").classList.remove("hidden");
+
+  el("dnd-check-btn").classList.add("hidden");
+  el("dnd-reset-btn").classList.add("hidden");
+  el("dnd-next-btn").classList.remove("hidden");
+  el("dragdrop-area").querySelectorAll(".dnd-chip").forEach((c) => (c.draggable = false));
+
+  recordResult(state.currentLanguage.id, entry.char, known);
+  if (known) state.correctCount++;
+  else state.missed.push(entry);
+}
+
 // ---------- typing ----------
 
 function submitTyping() {
   const entry = currentEntry();
   const input = el("typing-input").value;
   const known = normalizePinyin(input) === normalizePinyin(entry.pinyin);
+  // How long this answer took, from when the question was shown.
+  const elapsedMs = state.questionStart ? Date.now() - state.questionStart : null;
   const feedback = el("typing-feedback");
-  feedback.textContent = known ? "Correct!" : `Answer: ${entry.pinyin}`;
+  if (known) {
+    const secs = elapsedMs != null ? (elapsedMs / 1000).toFixed(1) : null;
+    feedback.textContent = secs != null ? `Correct! (${secs}s)` : "Correct!";
+  } else {
+    feedback.textContent = `Answer: ${entry.pinyin}`;
+  }
   feedback.className = known ? "correct" : "incorrect";
   el("typing-input").disabled = true;
   el("typing-submit").disabled = true;
-  recordResult(state.currentLanguage.id, entry.char, known);
+  // Only feed timing into the score on correct answers — a wrong answer's time
+  // is meaningless for "how fast do I recall this".
+  recordResult(state.currentLanguage.id, entry.char, known, known ? elapsedMs : null);
   if (known) state.correctCount++;
   else state.missed.push(entry);
   setTimeout(() => {
@@ -943,7 +1255,7 @@ function advance() {
 
 function showResults() {
   showScreen("results");
-  const total = state.queue.length;
+  const total = state.index; // questions actually answered this run
   el("results-summary").textContent = `${state.correctCount} / ${total} correct`;
   const missedContainer = el("results-missed");
   missedContainer.innerHTML = "";
@@ -959,6 +1271,41 @@ function showResults() {
       missedContainer.appendChild(chip);
     });
   }
+
+  renderRememberingLevels();
+}
+
+// Shows a "how well you remember these" bar for each word answered this run,
+// weakest first, using the accuracy+speed remembering score.
+function renderRememberingLevels() {
+  const container = el("results-remembering");
+  container.innerHTML = "";
+
+  // Unique entries answered this run (the queue up to where we stopped).
+  const seen = new Map();
+  state.queue.slice(0, state.index).forEach((e) => seen.set(e.char, e));
+  const rows = [...seen.values()]
+    .map((e) => ({ e, level: rememberingLevel(statFor(e.char)) }))
+    .filter((r) => r.level !== null)
+    .sort((a, b) => a.level - b.level);
+
+  if (!rows.length) return;
+
+  const heading = document.createElement("h3");
+  heading.className = "remembering-heading";
+  heading.textContent = "Remembering level";
+  container.appendChild(heading);
+
+  rows.forEach(({ e, level }) => {
+    const row = document.createElement("div");
+    row.className = "remembering-row";
+    const tier = level >= 75 ? "strong" : level >= 45 ? "medium" : "weak";
+    row.innerHTML =
+      `<span class="rem-word">${escapeHtml(e.char)} <span class="rem-pinyin">${escapeHtml(e.pinyin)}</span></span>` +
+      `<span class="rem-bar"><span class="rem-fill ${tier}" style="width:${level}%"></span></span>` +
+      `<span class="rem-pct">${level}%</span>`;
+    container.appendChild(row);
+  });
 }
 
 // ---------- utils ----------

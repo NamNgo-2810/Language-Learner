@@ -298,12 +298,174 @@ function handleGenerateSentence(req, res) {
   });
 }
 
-// Asks Claude for a story that weaves in the given vocabulary. Difficulty and
-// length are caller-controlled: `hskLevel` (1-6) sets the vocabulary/grammar
-// ceiling, `length` is the target number of sentences. Thinking is left on
-// (the default) since fitting many words together at a target level is a real
+// Asks Claude for a short sentence that uses the given target word, broken into
+// its word-level chunks in the correct order. The client shuffles `chunks` and
+// asks the learner to drag them back into order. `chunks` joined together must
+// equal `sentence`, so ordering can be checked exactly.
+async function generatePracticeSentence(char, pinyin) {
+  const message = await anthropic.messages.create({
+    model: "claude-opus-5",
+    max_tokens: 500,
+    thinking: { type: "disabled" },
+    output_config: {
+      effort: "low",
+      format: {
+        type: "json_schema",
+        schema: {
+          type: "object",
+          properties: {
+            sentence: { type: "string" },
+            chunks: { type: "array", items: { type: "string" } },
+          },
+          required: ["sentence", "chunks"],
+          additionalProperties: false,
+        },
+      },
+    },
+    system:
+      "You write one short, simple Mandarin Chinese sentence (HSK 1-3 level) that naturally uses the given character or word. " +
+      "Then split that exact sentence into its natural word-level chunks, in order — each chunk is a word or short unit (punctuation may stay attached to the preceding chunk). " +
+      "The chunks concatenated in order MUST exactly equal the sentence, with no characters added or removed. Aim for between 3 and 8 chunks. " +
+      "Reply with the Chinese sentence and the ordered chunks — no pinyin, no translation, no commentary.",
+    messages: [
+      { role: "user", content: `Target word: ${char} (pinyin: ${pinyin})` },
+    ],
+  });
+
+  if (message.stop_reason === "refusal") {
+    throw new Error("the model declined to generate a sentence for this input");
+  }
+
+  const textBlock = message.content.find((b) => b.type === "text");
+  if (!textBlock) throw new Error("no sentence returned");
+  const parsed = JSON.parse(textBlock.text);
+  let { sentence, chunks } = parsed;
+  if (!sentence || !Array.isArray(chunks) || !chunks.length) {
+    throw new Error("no sentence returned");
+  }
+  // Guard: if the chunks don't reassemble to the sentence, fall back to a
+  // per-character split so the drag-and-drop check stays exact.
+  if (chunks.join("") !== sentence) {
+    chunks = [...sentence];
+  }
+  return { sentence, chunks };
+}
+
+function handleGeneratePracticeSentence(req, res) {
+  if (!anthropic) {
+    return sendJSON(res, 500, {
+      error: "ANTHROPIC_API_KEY is not set on the server — export it before running npm start",
+    });
+  }
+  let body = "";
+  req.on("data", (chunk) => {
+    body += chunk;
+    if (body.length > 1e4) req.destroy();
+  });
+  req.on("end", async () => {
+    let data;
+    try {
+      data = JSON.parse(body);
+    } catch {
+      return sendJSON(res, 400, { error: "invalid JSON" });
+    }
+    const char = String(data.char || "").trim();
+    const pinyin = String(data.pinyin || "").trim();
+    if (!char || !pinyin) {
+      return sendJSON(res, 400, { error: "char and pinyin are required" });
+    }
+    try {
+      const result = await generatePracticeSentence(char, pinyin);
+      sendJSON(res, 200, { ok: true, ...result });
+    } catch (err) {
+      sendJSON(res, 502, { error: err.message || "generation failed" });
+    }
+  });
+}
+
+// Asks Claude for a natural sentence that uses the target word, returned as the
+// full-pinyin reading of the sentence with the target word's position marked by
+// a "＿" blank placeholder. The learner reads the pinyin context and picks the
+// correct character (from a set of same-pinyin confusables) that fits.
+async function generateConfusableContext(char, pinyin) {
+  const message = await anthropic.messages.create({
+    model: "claude-opus-5",
+    max_tokens: 500,
+    thinking: { type: "disabled" },
+    output_config: {
+      effort: "low",
+      format: {
+        type: "json_schema",
+        schema: {
+          type: "object",
+          properties: {
+            sentence: { type: "string" },
+            pinyin: { type: "string" },
+          },
+          required: ["sentence", "pinyin"],
+          additionalProperties: false,
+        },
+      },
+    },
+    system:
+      "You write one short, natural Mandarin Chinese sentence (HSK 1-3 level) that uses the given target word in a way that makes its meaning clear from context. " +
+      "Return two things: `sentence` = the sentence in Chinese characters, and `pinyin` = the full sentence written in pinyin with tone marks, BUT with the target word replaced by the placeholder ＿ (a full-width underscore). " +
+      "Keep pinyin word-spacing natural. Do not reveal the target character anywhere. No translation or commentary.",
+    messages: [
+      { role: "user", content: `Target word: ${char} (pinyin: ${pinyin})` },
+    ],
+  });
+
+  if (message.stop_reason === "refusal") {
+    throw new Error("the model declined to generate a sentence for this input");
+  }
+
+  const textBlock = message.content.find((b) => b.type === "text");
+  if (!textBlock) throw new Error("no sentence returned");
+  const parsed = JSON.parse(textBlock.text);
+  if (!parsed.sentence || !parsed.pinyin) throw new Error("no sentence returned");
+  return { sentence: parsed.sentence, pinyinContext: parsed.pinyin };
+}
+
+function handleGenerateConfusableContext(req, res) {
+  if (!anthropic) {
+    return sendJSON(res, 500, {
+      error: "ANTHROPIC_API_KEY is not set on the server — export it before running npm start",
+    });
+  }
+  let body = "";
+  req.on("data", (chunk) => {
+    body += chunk;
+    if (body.length > 1e4) req.destroy();
+  });
+  req.on("end", async () => {
+    let data;
+    try {
+      data = JSON.parse(body);
+    } catch {
+      return sendJSON(res, 400, { error: "invalid JSON" });
+    }
+    const char = String(data.char || "").trim();
+    const pinyin = String(data.pinyin || "").trim();
+    if (!char || !pinyin) {
+      return sendJSON(res, 400, { error: "char and pinyin are required" });
+    }
+    try {
+      const result = await generateConfusableContext(char, pinyin);
+      sendJSON(res, 200, { ok: true, ...result });
+    } catch (err) {
+      sendJSON(res, 502, { error: err.message || "generation failed" });
+    }
+  });
+}
+
+// Asks Claude for a story or conversation that weaves in the given vocabulary.
+// Caller-controlled: `hskLevel` (1-6) sets the vocabulary/grammar ceiling,
+// `length` is the target number of sentences (or exchanges for a conversation),
+// and `format` is "story" or "conversation". Thinking is left on (the default)
+// since fitting many words together at a target level is a real
 // constraint-satisfaction task, unlike the single-word sentence generator.
-async function generateReviewStory(words, hskLevel, length) {
+async function generateReviewStory(words, hskLevel, length, format) {
   const wordList = words.map((w) => `${w.char} (${w.pinyin})`).join(", ");
 
   const message = await anthropic.messages.create({
@@ -322,17 +484,20 @@ async function generateReviewStory(words, hskLevel, length) {
       },
     },
     system:
-      `You write a short story in Mandarin Chinese at approximately HSK level ${hskLevel} (on the 1-6 scale, where 1 is absolute beginner and 6 is advanced) — keep the vocabulary and grammar at or below that level. ` +
-      `Aim for about ${length} sentence${length === 1 ? "" : "s"}. ` +
-      "Naturally weave in as many of the learner's vocabulary words as fit comfortably at that level — you don't have to use all of them, and you may freely use other words the story needs. Never force an awkward sentence just to include a word. " +
-      "Reply with the story in Chinese characters only — no pinyin, no translation, no extra commentary.",
+      (format === "conversation"
+        ? `You write a short, natural conversation (dialogue) in Mandarin Chinese between two people at approximately HSK level ${hskLevel} (on the 1-6 scale, where 1 is absolute beginner and 6 is advanced) — keep the vocabulary and grammar at or below that level. ` +
+          `Aim for about ${length} lines of dialogue. Prefix each line with the speaker, e.g. "A：" and "B：", each line on its own line. `
+        : `You write a short story in Mandarin Chinese at approximately HSK level ${hskLevel} (on the 1-6 scale, where 1 is absolute beginner and 6 is advanced) — keep the vocabulary and grammar at or below that level. ` +
+          `Aim for about ${length} sentence${length === 1 ? "" : "s"}. `) +
+      "Naturally weave in as many of the learner's vocabulary words as fit comfortably at that level — you don't have to use all of them, and you may freely use other words the text needs. Never force an awkward line just to include a word. " +
+      "Reply with the Chinese characters only — no pinyin, no translation, no extra commentary.",
     messages: [
       { role: "user", content: `The learner's vocabulary words: ${wordList}` },
     ],
   });
 
   if (message.stop_reason === "refusal") {
-    throw new Error("the model declined to generate a story for this word list");
+    throw new Error("the model declined to generate text for this word list");
   }
 
   const textBlock = message.content.find((b) => b.type === "text");
@@ -376,10 +541,11 @@ function handleGenerateReviewStory(req, res) {
     // Difficulty controls, clamped to sane ranges regardless of client input.
     const hskLevel = Math.min(6, Math.max(1, Math.round(Number(data.hskLevel) || 3)));
     const length = Math.min(20, Math.max(1, Math.round(Number(data.length) || 5)));
+    const format = data.format === "conversation" ? "conversation" : "story";
 
     try {
-      const result = await generateReviewStory(cleaned, hskLevel, length);
-      sendJSON(res, 200, { ok: true, ...result });
+      const result = await generateReviewStory(cleaned, hskLevel, length, format);
+      sendJSON(res, 200, { ok: true, format, ...result });
     } catch (err) {
       sendJSON(res, 502, { error: err.message || "generation failed" });
     }
@@ -442,6 +608,12 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === "POST" && pathname === "/api/generate-sentence") {
     return handleGenerateSentence(req, res);
+  }
+  if (req.method === "POST" && pathname === "/api/generate-practice-sentence") {
+    return handleGeneratePracticeSentence(req, res);
+  }
+  if (req.method === "POST" && pathname === "/api/generate-confusable-context") {
+    return handleGenerateConfusableContext(req, res);
   }
   if (req.method === "POST" && pathname === "/api/generate-review-story") {
     return handleGenerateReviewStory(req, res);

@@ -53,12 +53,12 @@
       <button class="mode-card" data-mode="confusables" id="mode-confusables">
         <span class="mode-icon">🔀</span>
         <span class="mode-name">Confusables</span>
-        <span class="mode-desc">Same pinyin, different character — tell them apart</span>
+        <span class="mode-desc">Read the pinyin sentence, pick the right character for the context</span>
       </button>
       <button class="mode-card" data-mode="sentence" id="mode-sentence">
         <span class="mode-icon">📖</span>
-        <span class="mode-name">Sentence Practice</span>
-        <span class="mode-desc">Fill in the blank using the example sentence</span>
+        <span class="mode-name">Sentence Builder</span>
+        <span class="mode-desc">Drag the shuffled words into the right order</span>
       </button>
       <button class="mode-card" data-mode="story" id="mode-story">
         <span class="mode-icon">📝</span>
@@ -140,6 +140,20 @@
           <button class="rate-btn right wr-rate-btn" data-know="1">😄 Got it right</button>
         </div>
       </div>
+
+      <!-- drag-and-drop sentence builder mode -->
+      <div id="dragdrop-area" class="hidden">
+        <div class="dnd-status" id="dnd-status">Building your sentence…</div>
+        <div class="dnd-slots" id="dnd-slots"></div>
+        <div class="dnd-bank" id="dnd-bank"></div>
+        <div class="rate-row" id="dnd-controls">
+          <button id="dnd-check-btn" class="primary-btn" disabled>Check order</button>
+          <button id="dnd-reset-btn" class="secondary-btn">↺ Reset</button>
+        </div>
+        <div id="dnd-feedback"></div>
+        <div class="sentence-hint hidden" id="dnd-answer"></div>
+        <button id="dnd-next-btn" class="primary-btn hidden">Next →</button>
+      </div>
     </div>
     <button class="link-btn" id="quit-quiz">&larr; quit</button>
   </section>
@@ -150,6 +164,13 @@
     <p class="subtle" id="story-word-count"></p>
 
     <div class="story-controls">
+      <label class="story-control">
+        <span>Format</span>
+        <select id="story-format">
+          <option value="story" selected>Story</option>
+          <option value="conversation">Conversation</option>
+        </select>
+      </label>
       <label class="story-control">
         <span>Difficulty (HSK)</span>
         <select id="story-hsk">
@@ -162,14 +183,14 @@
         </select>
       </label>
       <label class="story-control">
-        <span>Length (sentences)</span>
+        <span id="story-length-label">Length (sentences)</span>
         <input type="number" id="story-length" min="1" max="20" value="5">
       </label>
       <button class="primary-btn" id="generate-story-btn">✨ Generate</button>
     </div>
 
     <div class="quiz-card">
-      <div id="story-text" class="story-text">Choose a difficulty and length, then generate a story.</div>
+      <div id="story-text" class="story-text">Choose a format, difficulty and length, then generate.</div>
       <p class="subtle story-hint-text">Tip: right-click (or long-press) any character to see its pinyin.</p>
     </div>
     <div class="button-row">
@@ -185,6 +206,7 @@
     <h2>Results</h2>
     <div id="results-summary"></div>
     <div id="results-missed"></div>
+    <div id="results-remembering"></div>
     <div class="button-row">
       <button class="primary-btn" id="retry-missed">Retry missed</button>
       <button class="secondary-btn" id="back-to-modes">Choose another mode</button>

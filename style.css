@@ -361,3 +361,111 @@ h2 { font-size: 1.15rem; margin: 0 0 4px; }
   font-weight: 400;
   margin-right: 6px;
 }
+
+/* pinyin-context confusables prompt */
+.prompt.pinyin-context {
+  font-size: 1.25rem;
+  line-height: 1.6;
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* ---------- drag-and-drop sentence builder ---------- */
+
+.dnd-status {
+  color: var(--subtle);
+  font-size: 0.95rem;
+  margin-bottom: 16px;
+}
+.dnd-slots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  min-height: 56px;
+  padding: 10px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  margin-bottom: 16px;
+}
+.dnd-slot {
+  min-width: 52px;
+  min-height: 44px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+}
+.dnd-slot.drop-hover,
+.dnd-bank.drop-hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent) inset;
+}
+.dnd-bank {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  min-height: 56px;
+  padding: 10px;
+  border-radius: 12px;
+  background: var(--card);
+  margin-bottom: 16px;
+}
+.dnd-chip {
+  background: var(--border);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 1.25rem;
+  cursor: grab;
+  user-select: none;
+  border: 2px solid transparent;
+  touch-action: manipulation;
+}
+.dnd-chip:hover { border-color: var(--accent); }
+.dnd-chip.dragging { opacity: 0.5; }
+.dnd-chip.correct { background: var(--good); color: #fff; }
+.dnd-chip.incorrect { background: var(--bad); color: #fff; }
+.dnd-answer-label { color: var(--subtle); margin-right: 6px; }
+
+/* ---------- remembering levels on the results screen ---------- */
+
+.remembering-heading {
+  font-size: 1rem;
+  margin: 24px 0 12px;
+  text-align: left;
+}
+.remembering-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.rem-word {
+  flex: 0 0 30%;
+  text-align: left;
+  font-size: 1.05rem;
+}
+.rem-word .rem-pinyin { color: var(--subtle); font-size: 0.85rem; margin-left: 4px; }
+.rem-bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--border);
+  overflow: hidden;
+}
+.rem-fill { display: block; height: 100%; border-radius: 4px; }
+.rem-fill.weak { background: var(--bad); }
+.rem-fill.medium { background: #f0b23e; }
+.rem-fill.strong { background: var(--good); }
+.rem-pct {
+  flex: 0 0 auto;
+  font-size: 0.85rem;
+  color: var(--subtle);
+  min-width: 3ch;
+  text-align: right;
+}
