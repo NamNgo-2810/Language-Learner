@@ -348,7 +348,7 @@ async function generatePracticeSentence(char, pinyin) {
   if (chunks.join("") !== sentence) {
     chunks = [...sentence];
   }
-  return { sentence, chunks };
+  return { sentence, chunks, sentencePinyin: toPinyin(sentence) };
 }
 
 function handleGeneratePracticeSentence(req, res) {
@@ -452,6 +452,73 @@ function handleGenerateConfusableContext(req, res) {
     }
     try {
       const result = await generateConfusableContext(char, pinyin);
+      sendJSON(res, 200, { ok: true, ...result });
+    } catch (err) {
+      sendJSON(res, 502, { error: err.message || "generation failed" });
+    }
+  });
+}
+
+// Asks Claude for the Hán Việt (Sino-Vietnamese) reading of a Chinese character
+// or word — the Vietnamese pronunciation historically borrowed for that Han
+// character, distinct from its Mandarin pinyin. Used to help Vietnamese-speaking
+// learners recognize the character via a reading they may already know.
+async function generateHanViet(char) {
+  const message = await anthropic.messages.create({
+    model: "claude-opus-5",
+    max_tokens: 100,
+    thinking: { type: "disabled" },
+    output_config: {
+      effort: "low",
+      format: {
+        type: "json_schema",
+        schema: {
+          type: "object",
+          properties: { hanViet: { type: "string" } },
+          required: ["hanViet"],
+          additionalProperties: false,
+        },
+      },
+    },
+    system:
+      "You give the Hán Việt (Sino-Vietnamese) reading of a Chinese character or word — the traditional Vietnamese pronunciation for that Han character, NOT a translation of its meaning. " +
+      "For a multi-character word, give the Hán Việt reading of each character in order, separated by spaces. Reply with just the reading, no commentary.",
+    messages: [{ role: "user", content: char }],
+  });
+
+  if (message.stop_reason === "refusal") {
+    throw new Error("the model declined to generate a Hán Việt reading for this input");
+  }
+
+  const textBlock = message.content.find((b) => b.type === "text");
+  if (!textBlock) throw new Error("no reading returned");
+  const parsed = JSON.parse(textBlock.text);
+  if (!parsed.hanViet) throw new Error("no reading returned");
+  return { hanViet: parsed.hanViet };
+}
+
+function handleGenerateHanViet(req, res) {
+  if (!anthropic) {
+    return sendJSON(res, 500, {
+      error: "ANTHROPIC_API_KEY is not set on the server — export it before running npm start",
+    });
+  }
+  let body = "";
+  req.on("data", (chunk) => {
+    body += chunk;
+    if (body.length > 1e4) req.destroy();
+  });
+  req.on("end", async () => {
+    let data;
+    try {
+      data = JSON.parse(body);
+    } catch {
+      return sendJSON(res, 400, { error: "invalid JSON" });
+    }
+    const char = String(data.char || "").trim();
+    if (!char) return sendJSON(res, 400, { error: "char is required" });
+    try {
+      const result = await generateHanViet(char);
       sendJSON(res, 200, { ok: true, ...result });
     } catch (err) {
       sendJSON(res, 502, { error: err.message || "generation failed" });
@@ -614,6 +681,9 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === "POST" && pathname === "/api/generate-confusable-context") {
     return handleGenerateConfusableContext(req, res);
+  }
+  if (req.method === "POST" && pathname === "/api/hanviet") {
+    return handleGenerateHanViet(req, res);
   }
   if (req.method === "POST" && pathname === "/api/generate-review-story") {
     return handleGenerateReviewStory(req, res);

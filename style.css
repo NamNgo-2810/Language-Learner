@@ -268,6 +268,19 @@ h2 { font-size: 1.15rem; margin: 0 0 4px; }
   margin: 8px 0 16px;
   line-height: 1.5;
 }
+
+.hanviet-hint {
+  font-size: 0.95rem;
+  color: var(--subtle);
+  font-style: italic;
+  margin: -8px 0 16px;
+}
+
+.dnd-answer-pinyin {
+  font-size: 0.9rem;
+  color: var(--subtle);
+  margin-top: 4px;
+}
 .sentence-hint .target {
   color: var(--accent);
   font-weight: 600;

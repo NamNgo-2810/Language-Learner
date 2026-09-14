@@ -398,6 +398,8 @@ function renderQuestion() {
     el("quiz-prompt").textContent = entry.char;
     el("flashcard-area").classList.remove("hidden");
     el("flashcard-answer").textContent = "";
+    el("flashcard-hanviet").classList.add("hidden");
+    el("flashcard-hanviet").textContent = "";
     el("flashcard-sentence").classList.add("hidden");
     el("flashcard-sentence").innerHTML = "";
     el("flip-btn").classList.remove("hidden");
@@ -460,6 +462,36 @@ function flipFlashcard() {
   }
   el("flip-btn").classList.add("hidden");
   el("flashcard-rate").classList.remove("hidden");
+  showHanVietFor(entry);
+}
+
+// Fetches (and caches, per entry) the Hán Việt reading and shows it under the
+// pinyin answer. Guards against a slow response landing after the learner has
+// already moved to a different card.
+async function showHanVietFor(entry) {
+  const box = el("flashcard-hanviet");
+  if (entry.hanViet) {
+    box.textContent = `Hán Việt: ${entry.hanViet}`;
+    box.classList.remove("hidden");
+    return;
+  }
+  try {
+    const res = await fetch("/api/hanviet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ char: entry.char }),
+    });
+    const data = await res.json();
+    if (res.ok && data.ok && data.hanViet) {
+      entry.hanViet = data.hanViet;
+      if (currentEntry() === entry) {
+        box.textContent = `Hán Việt: ${entry.hanViet}`;
+        box.classList.remove("hidden");
+      }
+    }
+  } catch {
+    // ignore — Hán Việt is a nice-to-have, not critical to the flashcard
+  }
 }
 
 function answerFlashcard(known) {
@@ -1011,8 +1043,9 @@ async function renderConfusableContext(entry) {
 // overwrite the current one after the learner advances.
 let currentQuestionToken = 0;
 
-// Holds the correct chunk order for the current sentence-builder question.
+// Holds the correct chunk order (and its pinyin) for the current sentence-builder question.
 let dndCorrect = [];
+let dndCorrectPinyin = "";
 
 async function renderSentenceBuilder(entry) {
   const token = ++currentQuestionToken;
@@ -1034,6 +1067,7 @@ async function renderSentenceBuilder(entry) {
 
   let sentence = null;
   let chunks = null;
+  let sentencePinyin = "";
   try {
     const res = await fetch("/api/generate-practice-sentence", {
       method: "POST",
@@ -1044,6 +1078,7 @@ async function renderSentenceBuilder(entry) {
     if (res.ok && data.ok) {
       sentence = data.sentence;
       chunks = data.chunks;
+      sentencePinyin = data.sentencePinyin || "";
     }
   } catch {
     // ignore — handled below
@@ -1060,6 +1095,7 @@ async function renderSentenceBuilder(entry) {
   }
 
   dndCorrect = chunks.slice();
+  dndCorrectPinyin = sentencePinyin;
   el("dnd-status").textContent = `Arrange the words to use 「${entry.char}」 in a sentence:`;
   buildDndUI(chunks);
 }
@@ -1199,7 +1235,11 @@ function checkSentenceOrder() {
   feedback.textContent = known ? "Correct!" : "Not quite — see the answer below.";
   feedback.className = known ? "correct" : "incorrect";
 
-  el("dnd-answer").innerHTML = `<span class="dnd-answer-label">Answer:</span> ${escapeHtml(dndCorrect.join(""))}`;
+  const pinyinLine = dndCorrectPinyin
+    ? `<div class="dnd-answer-pinyin">${escapeHtml(dndCorrectPinyin)}</div>`
+    : "";
+  el("dnd-answer").innerHTML =
+    `<span class="dnd-answer-label">Answer:</span> ${escapeHtml(dndCorrect.join(""))}${pinyinLine}`;
   el("dnd-answer").classList.remove("hidden");
 
   el("dnd-check-btn").classList.add("hidden");
