@@ -404,6 +404,7 @@ function renderQuestion() {
     el("flashcard-sentence").innerHTML = "";
     el("flip-btn").classList.remove("hidden");
     el("flashcard-rate").classList.add("hidden");
+    ensureHanViet(entry);
   } else if (state.mode === "mc-pinyin") {
     el("quiz-prompt").className = "prompt";
     el("quiz-prompt").textContent = entry.char;
@@ -462,36 +463,37 @@ function flipFlashcard() {
   }
   el("flip-btn").classList.add("hidden");
   el("flashcard-rate").classList.remove("hidden");
-  showHanVietFor(entry);
-}
-
-// Fetches (and caches, per entry) the Hán Việt reading and shows it under the
-// pinyin answer. Guards against a slow response landing after the learner has
-// already moved to a different card.
-async function showHanVietFor(entry) {
-  const box = el("flashcard-hanviet");
-  if (entry.hanViet) {
+  ensureHanViet(entry).then(() => {
+    if (currentEntry() !== entry || !entry.hanViet) return;
+    const box = el("flashcard-hanviet");
     box.textContent = `Hán Việt: ${entry.hanViet}`;
     box.classList.remove("hidden");
-    return;
-  }
-  try {
-    const res = await fetch("/api/hanviet", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ char: entry.char }),
+  });
+}
+
+// Fetches (and caches, per entry) the Hán Việt reading, so it's already in
+// hand by the time the learner flips the card instead of making them wait.
+// Called as soon as a flashcard question is shown. Dedupes concurrent calls
+// for the same entry via a cached in-flight promise.
+function ensureHanViet(entry) {
+  if (entry.hanViet) return Promise.resolve();
+  if (entry._hanVietPromise) return entry._hanVietPromise;
+  entry._hanVietPromise = fetch("/api/hanviet", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ char: entry.char }),
+  })
+    .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+    .then(({ ok, data }) => {
+      if (ok && data.ok && data.hanViet) entry.hanViet = data.hanViet;
+    })
+    .catch(() => {
+      // ignore — Hán Việt is a nice-to-have, not critical to the flashcard
+    })
+    .finally(() => {
+      entry._hanVietPromise = null;
     });
-    const data = await res.json();
-    if (res.ok && data.ok && data.hanViet) {
-      entry.hanViet = data.hanViet;
-      if (currentEntry() === entry) {
-        box.textContent = `Hán Việt: ${entry.hanViet}`;
-        box.classList.remove("hidden");
-      }
-    }
-  } catch {
-    // ignore — Hán Việt is a nice-to-have, not critical to the flashcard
-  }
+  return entry._hanVietPromise;
 }
 
 function answerFlashcard(known) {
