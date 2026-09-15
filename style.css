@@ -281,6 +281,11 @@ h2 { font-size: 1.15rem; margin: 0 0 4px; }
   color: var(--subtle);
   margin-top: 4px;
 }
+
+.hanviet-toggle-row {
+  margin-top: 12px;
+  font-size: 0.8rem;
+}
 .sentence-hint .target {
   color: var(--accent);
   font-weight: 600;

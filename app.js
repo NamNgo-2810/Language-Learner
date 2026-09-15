@@ -1,5 +1,17 @@
 const STORAGE_KEY = "lang-learner-stats-v1";
+const HANVIET_PREF_KEY = "lang-learner-show-hanviet";
 const SESSION_CAP = 20;
+
+// Whether to show the Hán Việt reading on flashcards. Defaults to on, persisted
+// across sessions.
+function isHanVietEnabled() {
+  const stored = localStorage.getItem(HANVIET_PREF_KEY);
+  return stored === null ? true : stored === "1";
+}
+
+function setHanVietEnabled(enabled) {
+  localStorage.setItem(HANVIET_PREF_KEY, enabled ? "1" : "0");
+}
 
 const state = {
   languages: [],
@@ -234,6 +246,27 @@ function bindStaticEvents() {
     btn.addEventListener("click", () => answerFlashcard(btn.dataset.know === "1"));
   });
 
+  const hanvietToggle = el("hanviet-toggle");
+  hanvietToggle.checked = isHanVietEnabled();
+  hanvietToggle.addEventListener("change", () => {
+    setHanVietEnabled(hanvietToggle.checked);
+    const alreadyFlipped = el("flip-btn").classList.contains("hidden");
+    if (!hanvietToggle.checked) {
+      el("flashcard-hanviet").classList.add("hidden");
+    } else if (alreadyFlipped) {
+      // card is already flipped — show it right away if we have it cached,
+      // otherwise fetch it now
+      const entry = currentEntry();
+      if (entry) {
+        ensureHanViet(entry).then(() => {
+          if (currentEntry() !== entry || !entry.hanViet || !isHanVietEnabled()) return;
+          el("flashcard-hanviet").textContent = `Hán Việt: ${entry.hanViet}`;
+          el("flashcard-hanviet").classList.remove("hidden");
+        });
+      }
+    }
+  });
+
   el("typing-submit").addEventListener("click", submitTyping);
   el("typing-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter") submitTyping();
@@ -404,7 +437,7 @@ function renderQuestion() {
     el("flashcard-sentence").innerHTML = "";
     el("flip-btn").classList.remove("hidden");
     el("flashcard-rate").classList.add("hidden");
-    ensureHanViet(entry);
+    if (isHanVietEnabled()) ensureHanViet(entry);
   } else if (state.mode === "mc-pinyin") {
     el("quiz-prompt").className = "prompt";
     el("quiz-prompt").textContent = entry.char;
@@ -463,12 +496,14 @@ function flipFlashcard() {
   }
   el("flip-btn").classList.add("hidden");
   el("flashcard-rate").classList.remove("hidden");
-  ensureHanViet(entry).then(() => {
-    if (currentEntry() !== entry || !entry.hanViet) return;
-    const box = el("flashcard-hanviet");
-    box.textContent = `Hán Việt: ${entry.hanViet}`;
-    box.classList.remove("hidden");
-  });
+  if (isHanVietEnabled()) {
+    ensureHanViet(entry).then(() => {
+      if (currentEntry() !== entry || !entry.hanViet || !isHanVietEnabled()) return;
+      const box = el("flashcard-hanviet");
+      box.textContent = `Hán Việt: ${entry.hanViet}`;
+      box.classList.remove("hidden");
+    });
+  }
 }
 
 // Fetches (and caches, per entry) the Hán Việt reading, so it's already in
