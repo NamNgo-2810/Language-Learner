@@ -1,5 +1,6 @@
 const STORAGE_KEY = "lang-learner-stats-v1";
 const HANVIET_PREF_KEY = "lang-learner-show-hanviet";
+const CHIETU_PREF_KEY = "lang-learner-show-chietu";
 const SESSION_CAP = 20;
 
 // Whether to show the Hán Việt reading on flashcards. Defaults to on, persisted
@@ -11,6 +12,17 @@ function isHanVietEnabled() {
 
 function setHanVietEnabled(enabled) {
   localStorage.setItem(HANVIET_PREF_KEY, enabled ? "1" : "0");
+}
+
+// Whether to show the chiết tự (character component) breakdown on
+// flashcards. Defaults to on, persisted across sessions.
+function isChietuEnabled() {
+  const stored = localStorage.getItem(CHIETU_PREF_KEY);
+  return stored === null ? true : stored === "1";
+}
+
+function setChietuEnabled(enabled) {
+  localStorage.setItem(CHIETU_PREF_KEY, enabled ? "1" : "0");
 }
 
 const state = {
@@ -267,6 +279,27 @@ function bindStaticEvents() {
     }
   });
 
+  const chietuToggle = el("chietu-toggle");
+  chietuToggle.checked = isChietuEnabled();
+  chietuToggle.addEventListener("change", () => {
+    setChietuEnabled(chietuToggle.checked);
+    const alreadyFlipped = el("flip-btn").classList.contains("hidden");
+    if (!chietuToggle.checked) {
+      el("flashcard-chietu").classList.add("hidden");
+    } else if (alreadyFlipped) {
+      // card is already flipped — show it right away if we have it cached,
+      // otherwise fetch it now
+      const entry = currentEntry();
+      if (entry) {
+        ensureChietu(entry).then(() => {
+          if (currentEntry() !== entry || !entry.chietu || !isChietuEnabled()) return;
+          el("flashcard-chietu").textContent = `Chiết tự: ${entry.chietu}`;
+          el("flashcard-chietu").classList.remove("hidden");
+        });
+      }
+    }
+  });
+
   el("typing-submit").addEventListener("click", submitTyping);
   el("typing-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter") submitTyping();
@@ -433,11 +466,14 @@ function renderQuestion() {
     el("flashcard-answer").textContent = "";
     el("flashcard-hanviet").classList.add("hidden");
     el("flashcard-hanviet").textContent = "";
+    el("flashcard-chietu").classList.add("hidden");
+    el("flashcard-chietu").textContent = "";
     el("flashcard-sentence").classList.add("hidden");
     el("flashcard-sentence").innerHTML = "";
     el("flip-btn").classList.remove("hidden");
     el("flashcard-rate").classList.add("hidden");
     if (isHanVietEnabled()) ensureHanViet(entry);
+    if (isChietuEnabled()) ensureChietu(entry);
   } else if (state.mode === "mc-pinyin") {
     el("quiz-prompt").className = "prompt";
     el("quiz-prompt").textContent = entry.char;
@@ -504,6 +540,14 @@ function flipFlashcard() {
       box.classList.remove("hidden");
     });
   }
+  if (isChietuEnabled()) {
+    ensureChietu(entry).then(() => {
+      if (currentEntry() !== entry || !entry.chietu || !isChietuEnabled()) return;
+      const box = el("flashcard-chietu");
+      box.textContent = `Chiết tự: ${entry.chietu}`;
+      box.classList.remove("hidden");
+    });
+  }
 }
 
 // Fetches (and caches, per entry) the Hán Việt reading, so it's already in
@@ -529,6 +573,31 @@ function ensureHanViet(entry) {
       entry._hanVietPromise = null;
     });
   return entry._hanVietPromise;
+}
+
+// Fetches (and caches, per entry) the chiết tự (character component)
+// breakdown, so it's already in hand by the time the learner flips the card.
+// Called as soon as a flashcard question is shown. Dedupes concurrent calls
+// for the same entry via a cached in-flight promise.
+function ensureChietu(entry) {
+  if (entry.chietu) return Promise.resolve();
+  if (entry._chietuPromise) return entry._chietuPromise;
+  entry._chietuPromise = fetch("/api/chietu", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ char: entry.char }),
+  })
+    .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+    .then(({ ok, data }) => {
+      if (ok && data.ok && data.chietu) entry.chietu = data.chietu;
+    })
+    .catch(() => {
+      // ignore — chiết tự is a nice-to-have, not critical to the flashcard
+    })
+    .finally(() => {
+      entry._chietuPromise = null;
+    });
+  return entry._chietuPromise;
 }
 
 function answerFlashcard(known) {

@@ -497,6 +497,76 @@ async function generateHanViet(char) {
   return { hanViet: parsed.hanViet };
 }
 
+// Asks Claude for a chiết tự (character component) breakdown of a Chinese
+// character or word — how it decomposes into its radical/component parts and
+// how those parts combine to give the character's meaning. Used to help
+// learners memorize characters through their structure rather than rote
+// repetition.
+async function generateChietu(char) {
+  const message = await anthropic.messages.create({
+    model: "claude-opus-5",
+    max_tokens: 300,
+    thinking: { type: "disabled" },
+    output_config: {
+      effort: "low",
+      format: {
+        type: "json_schema",
+        schema: {
+          type: "object",
+          properties: { chietu: { type: "string" } },
+          required: ["chietu"],
+          additionalProperties: false,
+        },
+      },
+    },
+    system:
+      "You give a chiết tự (character component / radical) breakdown of a Chinese character or word, for a Vietnamese-speaking learner of Chinese. " +
+      "For each character, list its components (radicals/parts) with their individual meaning, then briefly explain how those components combine to suggest the character's overall meaning. " +
+      "For a multi-character word, do this for each character in order, separated by ' | '. " +
+      "Keep it concise — a phrase or short sentence per character, not a lecture. Reply with just the breakdown, no extra commentary.",
+    messages: [{ role: "user", content: char }],
+  });
+
+  if (message.stop_reason === "refusal") {
+    throw new Error("the model declined to generate a component breakdown for this input");
+  }
+
+  const textBlock = message.content.find((b) => b.type === "text");
+  if (!textBlock) throw new Error("no breakdown returned");
+  const parsed = JSON.parse(textBlock.text);
+  if (!parsed.chietu) throw new Error("no breakdown returned");
+  return { chietu: parsed.chietu };
+}
+
+function handleGenerateChietu(req, res) {
+  if (!anthropic) {
+    return sendJSON(res, 500, {
+      error: "ANTHROPIC_API_KEY is not set on the server — export it before running npm start",
+    });
+  }
+  let body = "";
+  req.on("data", (chunk) => {
+    body += chunk;
+    if (body.length > 1e4) req.destroy();
+  });
+  req.on("end", async () => {
+    let data;
+    try {
+      data = JSON.parse(body);
+    } catch {
+      return sendJSON(res, 400, { error: "invalid JSON" });
+    }
+    const char = String(data.char || "").trim();
+    if (!char) return sendJSON(res, 400, { error: "char is required" });
+    try {
+      const result = await generateChietu(char);
+      sendJSON(res, 200, { ok: true, ...result });
+    } catch (err) {
+      sendJSON(res, 502, { error: err.message || "generation failed" });
+    }
+  });
+}
+
 function handleGenerateHanViet(req, res) {
   if (!anthropic) {
     return sendJSON(res, 500, {
@@ -684,6 +754,9 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === "POST" && pathname === "/api/hanviet") {
     return handleGenerateHanViet(req, res);
+  }
+  if (req.method === "POST" && pathname === "/api/chietu") {
+    return handleGenerateChietu(req, res);
   }
   if (req.method === "POST" && pathname === "/api/generate-review-story") {
     return handleGenerateReviewStory(req, res);

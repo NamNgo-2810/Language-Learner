@@ -276,6 +276,13 @@ h2 { font-size: 1.15rem; margin: 0 0 4px; }
   margin: -8px 0 16px;
 }
 
+.chietu-hint {
+  font-size: 0.9rem;
+  color: var(--subtle);
+  margin: -8px 0 16px;
+  line-height: 1.5;
+}
+
 .dnd-answer-pinyin {
   font-size: 0.9rem;
   color: var(--subtle);
