@@ -585,7 +585,7 @@ function ensureChietu(entry) {
   entry._chietuPromise = fetch("/api/chietu", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ char: entry.char }),
+    body: JSON.stringify({ char: entry.char, languageId: state.currentLanguage.id }),
   })
     .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
     .then(({ ok, data }) => {
@@ -1029,6 +1029,7 @@ async function submitNewCharacter() {
       sentence: sentence || null,
       sessionIndex: maxSessionIndex(state.entries) + (data.newSession ? 1 : 0),
       sessionLabel: data.sessionLabel || null,
+      chietu: data.chietu || null,
     });
     feedback.textContent = `Added ${char} ${pinyin}`;
     feedback.className = "correct";

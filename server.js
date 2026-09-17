@@ -121,7 +121,8 @@ function handleGetLanguages(req, res) {
 }
 
 // GET /api/words?languageId=xxx — returns the language's words from its sheet
-// as parsed entries: [{ char, pinyin, sentence, sessionIndex, sessionLabel }].
+// as parsed entries: [{ char, pinyin, sentence, sessionIndex, sessionLabel,
+// chietu, rowNumber }].
 function handleGetWords(req, res, query) {
   if (!sheets.isConfigured()) {
     return sendJSON(res, 500, {
@@ -208,6 +209,19 @@ function handleAddWord(req, res) {
     const target = resolveLanguageTarget(languageId);
     if (target.error) return sendJSON(res, target.status, { error: target.error });
 
+    // Generate the chiết tự breakdown once, up front, so it's cached in the
+    // sheet from the start and never needs to be requested from Claude again.
+    // Best-effort: a failure here (or no API key configured) shouldn't block
+    // adding the word — it can still be generated lazily later.
+    let chietu = "";
+    if (anthropic) {
+      try {
+        chietu = (await generateChietu(char)).chietu;
+      } catch {
+        // ignore — will be generated on first flashcard view instead
+      }
+    }
+
     try {
       const today = todayLabel();
       const last = await sheets.lastSessionLabel(target.sheetId, target.tab);
@@ -217,8 +231,9 @@ function handleAddWord(req, res) {
         pinyin,
         sentence,
         session: today,
+        chietu,
       });
-      sendJSON(res, 200, { ok: true, char, pinyin, newSession, sessionLabel: today });
+      sendJSON(res, 200, { ok: true, char, pinyin, newSession, sessionLabel: today, chietu: chietu || null });
     } catch (err) {
       sendJSON(res, 502, { error: err.message || "write failed" });
     }
@@ -538,12 +553,12 @@ async function generateChietu(char) {
   return { chietu: parsed.chietu };
 }
 
+// POST /api/chietu { languageId, char } — returns the chiết tự breakdown for
+// a character, preferring the cache stored in the word's sheet row (column H)
+// over asking Claude again. Only new characters (no cached value yet) hit the
+// model; the result is then written back to that row so it's cached for
+// every future view, in this session and beyond.
 function handleGenerateChietu(req, res) {
-  if (!anthropic) {
-    return sendJSON(res, 500, {
-      error: "ANTHROPIC_API_KEY is not set on the server — export it before running npm start",
-    });
-  }
   let body = "";
   req.on("data", (chunk) => {
     body += chunk;
@@ -557,9 +572,45 @@ function handleGenerateChietu(req, res) {
       return sendJSON(res, 400, { error: "invalid JSON" });
     }
     const char = String(data.char || "").trim();
+    const languageId = String(data.languageId || "").trim();
     if (!char) return sendJSON(res, 400, { error: "char is required" });
+
+    // Look up the word's row so we can reuse an already-cached breakdown, or
+    // save a freshly generated one back to it.
+    let target = null;
+    let row = null;
+    if (languageId && sheets.isConfigured()) {
+      target = resolveLanguageTarget(languageId);
+      if (target.error) target = null; // fall through to a stateless generation below
+      if (target) {
+        try {
+          const entries = await sheets.readEntries(target.sheetId, target.tab);
+          row = entries.find((e) => e.char === char) || null;
+        } catch {
+          // sheet read failed — fall back to a stateless generation below
+        }
+      }
+    }
+
+    if (row && row.chietu) {
+      return sendJSON(res, 200, { ok: true, chietu: row.chietu });
+    }
+
+    if (!anthropic) {
+      return sendJSON(res, 500, {
+        error: "ANTHROPIC_API_KEY is not set on the server — export it before running npm start",
+      });
+    }
     try {
       const result = await generateChietu(char);
+      if (target && row) {
+        try {
+          await sheets.updateChietu(target.sheetId, target.tab, row.rowNumber, result.chietu);
+        } catch {
+          // the learner still gets their answer even if the write-back fails;
+          // it'll just be regenerated next time
+        }
+      }
       sendJSON(res, 200, { ok: true, ...result });
     } catch (err) {
       sendJSON(res, 502, { error: err.message || "generation failed" });

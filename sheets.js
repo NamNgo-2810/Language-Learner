@@ -84,8 +84,12 @@ function quoteTab(tab) {
 //   - "native"  : char=A, pinyin=B, sentence=C, session=D  (written by this app)
 //   - "form"    : char=D, pinyin=E, sentence=(none), timestamp=G
 //                 (e.g. words added via a linked Google Form)
+// Column H is shared by both layouts and holds the cached chiết tự (character
+// component breakdown) explanation, generated once and reused instead of
+// asking Claude on every flashcard view.
 // normalizeRow figures out which layout a given row is and returns a common
-// { char, pinyin, sentence, session } shape, or null if the row has no word.
+// { char, pinyin, sentence, session, chietu } shape, or null if the row has
+// no word.
 //
 // A1-notation date-like timestamps (e.g. a full "2026-09-08 14:03:22") are
 // trimmed to just the YYYY-MM-DD part so both layouts group into sessions the
@@ -101,6 +105,7 @@ function sessionFromCell(value) {
 
 function normalizeRow(row) {
   const col = (i) => String((row && row[i]) || "").trim();
+  const chietu = col(7) || null; // column H, shared by both layouts
 
   // Native layout: char in column A.
   if (col(0)) {
@@ -112,6 +117,7 @@ function normalizeRow(row) {
       pinyin,
       sentence: col(2) || null,
       session: sessionFromCell(col(3)),
+      chietu,
     };
   }
 
@@ -125,6 +131,7 @@ function normalizeRow(row) {
       pinyin,
       sentence: col(5) || null, // tolerate an optional sentence in column F
       session: sessionFromCell(col(6)),
+      chietu,
     };
   }
 
@@ -133,21 +140,24 @@ function normalizeRow(row) {
 
 // Reads every word row for a language's tab and returns entries in the same
 // shape the client already expects from the old markdown parser:
-//   { char, pinyin, sentence, sessionIndex, sessionLabel }
+//   { char, pinyin, sentence, sessionIndex, sessionLabel, chietu, rowNumber }
 // Handles both the native (A-D) and form (D/E/G) row layouts on the same tab.
 // sessionIndex is assigned in the order sessions (dates) first appear.
+// rowNumber is the 1-based sheet row, used to write the chietu cache back to
+// the right row later without a second lookup.
 async function readEntries(spreadsheetId, tab) {
   const sheets = await getSheetsClient();
-  // Read A:G so both layouts (char in A, or char in D + timestamp in G) are covered.
-  const range = `${quoteTab(tab)}!A:G`;
+  // Read A:H so both layouts (char in A, or char in D + timestamp in G) are
+  // covered, plus the shared chietu cache column (H).
+  const range = `${quoteTab(tab)}!A:H`;
   const res = await sheets.spreadsheets.values.get({ spreadsheetId, range });
   const rows = res.data.values || [];
 
   const sessionOrder = new Map(); // sessionLabel -> sessionIndex
   const entries = [];
 
-  for (const row of rows) {
-    const norm = normalizeRow(row);
+  for (let i = 0; i < rows.length; i++) {
+    const norm = normalizeRow(rows[i]);
     if (!norm) continue; // blank row, header-ish row, or incomplete word
 
     const sessionLabel = norm.session;
@@ -163,6 +173,8 @@ async function readEntries(spreadsheetId, tab) {
       sentence: norm.sentence,
       sessionIndex,
       sessionLabel,
+      chietu: norm.chietu,
+      rowNumber: i + 1,
     });
   }
 
@@ -181,14 +193,28 @@ async function lastSessionLabel(spreadsheetId, tab) {
 }
 
 // Appends one word row. `session` is the YYYY-MM-DD label the row belongs to.
-async function appendEntry(spreadsheetId, tab, { char, pinyin, sentence, session }) {
+// `chietu` (optional) is the chiết tự breakdown generated at add-time, cached
+// in column H so it's never re-requested from Claude later.
+async function appendEntry(spreadsheetId, tab, { char, pinyin, sentence, session, chietu }) {
   const sheets = await getSheetsClient();
   await sheets.spreadsheets.values.append({
     spreadsheetId,
-    range: `${quoteTab(tab)}!A:D`,
+    range: `${quoteTab(tab)}!A:H`,
     valueInputOption: "RAW",
     insertDataOption: "INSERT_ROWS",
-    requestBody: { values: [[char, pinyin, sentence || "", session || ""]] },
+    requestBody: { values: [[char, pinyin, sentence || "", session || "", "", "", "", chietu || ""]] },
+  });
+}
+
+// Writes (or overwrites) the cached chiết tự breakdown for one existing row,
+// identified by its 1-based sheet row number (as returned by readEntries).
+async function updateChietu(spreadsheetId, tab, rowNumber, chietu) {
+  const sheets = await getSheetsClient();
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `${quoteTab(tab)}!H${rowNumber}`,
+    valueInputOption: "RAW",
+    requestBody: { values: [[chietu]] },
   });
 }
 
@@ -220,5 +246,6 @@ module.exports = {
   lastSessionLabel,
   appendEntry,
   appendEntries,
+  updateChietu,
   countDataRows,
 };
