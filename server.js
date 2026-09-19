@@ -653,8 +653,19 @@ function handleGenerateHanViet(req, res) {
 // and `format` is "story" or "conversation". Thinking is left on (the default)
 // since fitting many words together at a target level is a real
 // constraint-satisfaction task, unlike the single-word sentence generator.
+function shuffle(array) {
+  const result = array.slice();
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
 async function generateReviewStory(words, hskLevel, length, format) {
-  const wordList = words.map((w) => `${w.char} (${w.pinyin})`).join(", ");
+  const wordList = shuffle(words)
+    .map((w) => `${w.char} (${w.pinyin})`)
+    .join(", ");
 
   const message = await anthropic.messages.create({
     model: "claude-opus-5",
