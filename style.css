@@ -289,6 +289,12 @@ h2 { font-size: 1.15rem; margin: 0 0 4px; }
   margin-top: 4px;
 }
 
+.dnd-answer-alt {
+  font-size: 0.85rem;
+  color: var(--subtle);
+  margin-top: 6px;
+}
+
 .hanviet-toggle-row {
   margin-top: 12px;
   font-size: 0.8rem;

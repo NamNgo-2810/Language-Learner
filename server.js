@@ -313,11 +313,22 @@ function handleGenerateSentence(req, res) {
   });
 }
 
-// Asks Claude for a short sentence that uses the given target word, broken into
-// its word-level chunks in the correct order. The client shuffles `chunks` and
-// asks the learner to drag them back into order. `chunks` joined together must
-// equal `sentence`, so ordering can be checked exactly.
-async function generatePracticeSentence(char, pinyin) {
+// Asks Claude for a short, standalone Mandarin sentence (not tied to the
+// learner's vocabulary), broken into its word-level chunks in the correct
+// order. The client shuffles `chunks` and asks the learner to drag them back
+// into order. `chunks` joined together must equal `sentence`, so ordering can
+// be checked exactly. Some sentences have more than one grammatically correct
+// word order (e.g. a time word or adverb that can move) with the same
+// meaning, so Claude also returns every valid ordering as `validOrders` and
+// the client accepts a match against any of them.
+function sameChunkMultiset(a, b) {
+  if (a.length !== b.length) return false;
+  const sortedA = a.slice().sort();
+  const sortedB = b.slice().sort();
+  return sortedA.every((v, i) => v === sortedB[i]);
+}
+
+async function generatePracticeSentence() {
   const message = await anthropic.messages.create({
     model: "claude-opus-5",
     max_tokens: 500,
@@ -331,30 +342,30 @@ async function generatePracticeSentence(char, pinyin) {
           properties: {
             sentence: { type: "string" },
             chunks: { type: "array", items: { type: "string" } },
+            validOrders: { type: "array", items: { type: "array", items: { type: "string" } } },
           },
-          required: ["sentence", "chunks"],
+          required: ["sentence", "chunks", "validOrders"],
           additionalProperties: false,
         },
       },
     },
     system:
-      "You write one short, simple Mandarin Chinese sentence (HSK 1-3 level) that naturally uses the given character or word. " +
+      "You write one short, simple Mandarin Chinese sentence (HSK 1-3 level) for a sentence-ordering exercise. Pick any everyday topic — vary it each time. " +
       "Then split that exact sentence into its natural word-level chunks, in order — each chunk is a word or short unit (punctuation may stay attached to the preceding chunk). " +
       "The chunks concatenated in order MUST exactly equal the sentence, with no characters added or removed. Aim for between 3 and 8 chunks. " +
-      "Reply with the Chinese sentence and the ordered chunks — no pinyin, no translation, no commentary.",
-    messages: [
-      { role: "user", content: `Target word: ${char} (pinyin: ${pinyin})` },
-    ],
+      "Some sentences allow more than one grammatically correct word order with the same meaning (e.g. moving a time word, an adverb, or an object). If so, list every valid ordering of those exact chunks as `validOrders` (each entry is the full array of chunks in one valid order), including the original order. If there's genuinely only one correct order, `validOrders` should contain just that one ordering. " +
+      "Reply with the Chinese sentence, the ordered chunks, and the valid orderings — no pinyin, no translation, no commentary.",
+    messages: [{ role: "user", content: "Generate a new practice sentence." }],
   });
 
   if (message.stop_reason === "refusal") {
-    throw new Error("the model declined to generate a sentence for this input");
+    throw new Error("the model declined to generate a sentence");
   }
 
   const textBlock = message.content.find((b) => b.type === "text");
   if (!textBlock) throw new Error("no sentence returned");
   const parsed = JSON.parse(textBlock.text);
-  let { sentence, chunks } = parsed;
+  let { sentence, chunks, validOrders } = parsed;
   if (!sentence || !Array.isArray(chunks) || !chunks.length) {
     throw new Error("no sentence returned");
   }
@@ -363,7 +374,23 @@ async function generatePracticeSentence(char, pinyin) {
   if (chunks.join("") !== sentence) {
     chunks = [...sentence];
   }
-  return { sentence, chunks, sentencePinyin: toPinyin(sentence) };
+
+  // Keep only orderings that are genuine permutations of the same chunks, and
+  // always ensure the canonical order is included.
+  const validated = (Array.isArray(validOrders) ? validOrders : []).filter(
+    (o) => Array.isArray(o) && sameChunkMultiset(o, chunks)
+  );
+  const seen = new Set();
+  const orders = [];
+  [chunks, ...validated].forEach((o) => {
+    const key = o.join("\u0000");
+    if (!seen.has(key)) {
+      seen.add(key);
+      orders.push(o);
+    }
+  });
+
+  return { sentence, chunks, sentencePinyin: toPinyin(sentence), validOrders: orders };
 }
 
 function handleGeneratePracticeSentence(req, res) {
@@ -372,25 +399,13 @@ function handleGeneratePracticeSentence(req, res) {
       error: "ANTHROPIC_API_KEY is not set on the server — export it before running npm start",
     });
   }
-  let body = "";
-  req.on("data", (chunk) => {
-    body += chunk;
-    if (body.length > 1e4) req.destroy();
-  });
+  // No request body fields are needed anymore (the sentence isn't anchored to
+  // a vocabulary word), but drain the request stream to be a well-behaved
+  // handler for clients that still send a body.
+  req.on("data", () => {});
   req.on("end", async () => {
-    let data;
     try {
-      data = JSON.parse(body);
-    } catch {
-      return sendJSON(res, 400, { error: "invalid JSON" });
-    }
-    const char = String(data.char || "").trim();
-    const pinyin = String(data.pinyin || "").trim();
-    if (!char || !pinyin) {
-      return sendJSON(res, 400, { error: "char and pinyin are required" });
-    }
-    try {
-      const result = await generatePracticeSentence(char, pinyin);
+      const result = await generatePracticeSentence();
       sendJSON(res, 200, { ok: true, ...result });
     } catch (err) {
       sendJSON(res, 502, { error: err.message || "generation failed" });
@@ -689,6 +704,7 @@ async function generateReviewStory(words, hskLevel, length, format) {
         : `You write a short story in Mandarin Chinese at approximately HSK level ${hskLevel} (on the 1-6 scale, where 1 is absolute beginner and 6 is advanced) — keep the vocabulary and grammar at or below that level. ` +
           `Aim for about ${length} sentence${length === 1 ? "" : "s"}. `) +
       "Naturally weave in as many of the learner's vocabulary words as fit comfortably at that level — you don't have to use all of them, and you may freely use other words the text needs. Never force an awkward line just to include a word. " +
+      "Invent a fresh, specific setting, genre, and cast each time — pick something unexpected (e.g. a heist, a talking animal, a sports match, a mystery, sci-fi, historical drama) rather than defaulting to the same everyday-life scenario. Surprise the learner; avoid clichés and repeating premises you'd typically reach for. " +
       "Reply with the Chinese characters only — no pinyin, no translation, no extra commentary.",
     messages: [
       { role: "user", content: `The learner's vocabulary words: ${wordList}` },

@@ -2,6 +2,7 @@ const STORAGE_KEY = "lang-learner-stats-v1";
 const HANVIET_PREF_KEY = "lang-learner-show-hanviet";
 const CHIETU_PREF_KEY = "lang-learner-show-chietu";
 const SESSION_CAP = 20;
+const SENTENCE_SESSION_LENGTH = 10; // sentence builder isn't tied to the vocab list, so it's a fixed-length run
 
 // Whether to show the Hán Việt reading on flashcards. Defaults to on, persisted
 // across sessions.
@@ -352,7 +353,9 @@ function bindStaticEvents() {
     showScreen("mode");
   });
 
-  bindStoryPinyinLookup();
+  bindPinyinLookup(el("story-text"), ".story-char");
+  bindPinyinLookup(el("dragdrop-area"), ".dnd-chip");
+  bindGlobalPinyinPopupDismiss();
 }
 
 // ---------- mode launch (filters the pool per mode, then starts the quiz) ----------
@@ -368,11 +371,10 @@ function launchMode(mode) {
     }
     beginQuiz(mode, pool);
   } else if (mode === "sentence") {
-    if (!state.entries.length) {
-      alert("No words yet — add some characters first.");
-      return;
-    }
-    beginQuiz(mode, state.entries);
+    // Not tied to the learner's vocabulary — each question is a freshly
+    // generated standalone sentence, so the queue is just placeholders.
+    const placeholders = Array.from({ length: SENTENCE_SESSION_LENGTH }, (_, i) => ({ id: i }));
+    beginQuiz(mode, placeholders, { skipCap: true });
   } else {
     beginQuiz(mode, state.entries);
   }
@@ -521,6 +523,38 @@ function normalizePinyin(str) {
     .trim();
 }
 
+// Tone-aware comparison used for grading typed pinyin answers, so "wu3"/"w\u01d4"
+// count as correct but a toneless "wu" does not. Converts each syllable to a
+// base + tone-number form (e.g. "w\u01d4" -> "wu3", untoned "de" -> "de5" for the
+// neutral tone) so diacritic and numbered input compare equal.
+const TONE_MARK_TO_NUMBER = {
+  "\u0304": "1", // macron
+  "\u0301": "2", // acute
+  "\u030c": "3", // caron
+  "\u0300": "4", // grave
+};
+
+function toneNumberedSyllable(syllable) {
+  let base = "";
+  let tone = "";
+  for (const ch of syllable.normalize("NFD")) {
+    if (TONE_MARK_TO_NUMBER[ch]) tone = TONE_MARK_TO_NUMBER[ch];
+    else if (/[0-9]/.test(ch)) tone = ch; // already numbered, e.g. "wu3"
+    else base += ch;
+  }
+  return base + (tone || "5"); // no mark/number found -> neutral tone
+}
+
+function normalizePinyinStrict(str) {
+  return str
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(toneNumberedSyllable)
+    .join(" ");
+}
+
 // ---------- flashcard ----------
 
 function flipFlashcard() {
@@ -656,13 +690,31 @@ function escapeHtml(str) {
 // speak-along highlighter can map spoken character offsets back to the DOM.
 let currentStoryText = "";
 
+// Recently-added words make for more varied, less repetitive stories than
+// drawing from the whole (ever-growing) vocabulary list every time. Falls
+// back to the full list if nothing was added in the window, so the feature
+// still works for someone returning after a longer break.
+const STORY_RECENCY_DAYS = 7;
+
+function recentStoryWords() {
+  const cutoff = Date.now() - STORY_RECENCY_DAYS * 24 * 60 * 60 * 1000;
+  const recent = state.entries.filter((e) => {
+    if (!e.sessionLabel) return false;
+    const t = Date.parse(e.sessionLabel);
+    return !Number.isNaN(t) && t >= cutoff;
+  });
+  return recent.length ? recent : state.entries;
+}
+
 function startReviewStory() {
   stopSpeaking();
   currentStoryText = "";
   el("speak-story-btn").disabled = true;
   el("story-text").textContent = "Choose a difficulty and length, then generate a story.";
-  el("story-word-count").textContent = state.entries.length
-    ? `${state.entries.length} word${state.entries.length === 1 ? "" : "s"} in your list to draw from`
+  const words = recentStoryWords();
+  const isRecent = words.length !== state.entries.length;
+  el("story-word-count").textContent = words.length
+    ? `${words.length} word${words.length === 1 ? "" : "s"} ${isRecent ? `added in the last ${STORY_RECENCY_DAYS} days` : "in your list"} to draw from`
     : "";
   showScreen("story");
 }
@@ -676,7 +728,7 @@ function updateStoryLengthLabel() {
 
 async function generateReviewStory() {
   stopSpeaking();
-  const words = state.entries; // no cap — the whole list is fair game
+  const words = recentStoryWords();
   const btn = el("generate-story-btn");
   const textEl = el("story-text");
 
@@ -859,15 +911,17 @@ async function showPinyinPopupFor(text, x, y) {
   pinyinPopupTimer = setTimeout(hidePinyinPopup, 3500);
 }
 
-function bindStoryPinyinLookup() {
-  const container = el("story-text");
-
-  // Right-click a character (or a text selection) to look up its pinyin.
+// Right-click (or long-press on touch) any element matching `selector` inside
+// `container` to look up its pinyin — used for both the story text and the
+// sentence-builder word chips. A text selection takes priority over the
+// element under the cursor, so selecting a multi-character span still works.
+function bindPinyinLookup(container, selector) {
   container.addEventListener("contextmenu", (e) => {
     const selection = String(window.getSelection ? window.getSelection().toString() : "").trim();
     let target = selection;
-    if (!target && e.target.classList && e.target.classList.contains("story-char")) {
-      target = e.target.textContent;
+    if (!target) {
+      const matched = e.target.closest ? e.target.closest(selector) : null;
+      if (matched) target = matched.textContent;
     }
     if (!target) return; // let the normal menu show if there's nothing to look up
     e.preventDefault();
@@ -879,8 +933,8 @@ function bindStoryPinyinLookup() {
   container.addEventListener(
     "touchstart",
     (e) => {
-      const t = e.target;
-      if (!(t.classList && t.classList.contains("story-char"))) return;
+      const t = e.target.closest ? e.target.closest(selector) : null;
+      if (!t) return;
       const touch = e.touches[0];
       touchTimer = setTimeout(() => {
         showPinyinPopupFor(t.textContent, touch.clientX, touch.clientY);
@@ -893,7 +947,9 @@ function bindStoryPinyinLookup() {
   };
   container.addEventListener("touchend", cancelTouch);
   container.addEventListener("touchmove", cancelTouch);
+}
 
+function bindGlobalPinyinPopupDismiss() {
   // Dismiss the popup on any click/scroll elsewhere.
   document.addEventListener("click", hidePinyinPopup);
   document.addEventListener("scroll", hidePinyinPopup, true);
@@ -1150,15 +1206,18 @@ async function renderConfusableContext(entry) {
 // overwrite the current one after the learner advances.
 let currentQuestionToken = 0;
 
-// Holds the correct chunk order (and its pinyin) for the current sentence-builder question.
+// Holds the correct chunk order(s) (and pinyin) for the current sentence-builder
+// question. dndValidOrders holds every grammatically valid ordering of the
+// same chunks — the learner's arrangement is correct if it matches any of them.
 let dndCorrect = [];
+let dndValidOrders = [];
 let dndCorrectPinyin = "";
 
 async function renderSentenceBuilder(entry) {
   const token = ++currentQuestionToken;
   el("dragdrop-area").classList.remove("hidden");
   el("quiz-prompt").className = "prompt";
-  el("quiz-prompt").textContent = entry.char;
+  el("quiz-prompt").textContent = "Sentence Builder";
 
   el("dnd-status").textContent = "Generating a sentence…";
   el("dnd-slots").innerHTML = "";
@@ -1175,17 +1234,19 @@ async function renderSentenceBuilder(entry) {
   let sentence = null;
   let chunks = null;
   let sentencePinyin = "";
+  let validOrders = [];
   try {
     const res = await fetch("/api/generate-practice-sentence", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ char: entry.char, pinyin: entry.pinyin }),
+      body: JSON.stringify({}),
     });
     const data = await res.json();
     if (res.ok && data.ok) {
       sentence = data.sentence;
       chunks = data.chunks;
       sentencePinyin = data.sentencePinyin || "";
+      validOrders = Array.isArray(data.validOrders) && data.validOrders.length ? data.validOrders : [chunks];
     }
   } catch {
     // ignore — handled below
@@ -1194,7 +1255,7 @@ async function renderSentenceBuilder(entry) {
   if (token !== currentQuestionToken) return;
 
   if (!sentence || !Array.isArray(chunks) || chunks.length < 2) {
-    el("dnd-status").textContent = "Couldn't generate a sentence for this word — skipping.";
+    el("dnd-status").textContent = "Couldn't generate a sentence — skipping.";
     el("dnd-check-btn").classList.add("hidden");
     el("dnd-reset-btn").classList.add("hidden");
     el("dnd-next-btn").classList.remove("hidden");
@@ -1202,8 +1263,12 @@ async function renderSentenceBuilder(entry) {
   }
 
   dndCorrect = chunks.slice();
+  dndValidOrders = validOrders;
   dndCorrectPinyin = sentencePinyin;
-  el("dnd-status").textContent = `Arrange the words to use 「${entry.char}」 in a sentence:`;
+  // Stash the answer on the placeholder entry so results/missed chips can show it.
+  entry.char = sentence;
+  entry.pinyin = sentencePinyin;
+  el("dnd-status").textContent = "Arrange the words into a grammatically correct sentence:";
   buildDndUI(chunks);
 }
 
@@ -1328,14 +1393,20 @@ function checkSentenceOrder() {
     const chip = s.querySelector(".dnd-chip");
     return chip ? chip.dataset.text : "";
   });
-  const known = assembled.join("") === dndCorrect.join("");
+  const assembledText = assembled.join("");
+  const matchedOrder = dndValidOrders.find((order) => order.join("") === assembledText);
+  const known = Boolean(matchedOrder);
   const entry = currentEntry();
+  // Highlight against whichever valid order the learner actually matched (or
+  // the canonical one, if none matched) so a correct-but-reordered answer
+  // doesn't get marked wrong chip-by-chip.
+  const referenceOrder = matchedOrder || dndCorrect;
 
   slots.forEach((s, i) => {
     const chip = s.querySelector(".dnd-chip");
     if (!chip) return;
-    chip.classList.toggle("correct", chip.dataset.text === dndCorrect[i]);
-    chip.classList.toggle("incorrect", chip.dataset.text !== dndCorrect[i]);
+    chip.classList.toggle("correct", chip.dataset.text === referenceOrder[i]);
+    chip.classList.toggle("incorrect", chip.dataset.text !== referenceOrder[i]);
   });
 
   const feedback = el("dnd-feedback");
@@ -1345,8 +1416,14 @@ function checkSentenceOrder() {
   const pinyinLine = dndCorrectPinyin
     ? `<div class="dnd-answer-pinyin">${escapeHtml(dndCorrectPinyin)}</div>`
     : "";
+  // If the sentence allows more than one valid word order, list them all —
+  // the learner may have matched an order other than the canonical one.
+  const altOrders = dndValidOrders.filter((o) => o !== matchedOrder && o.join("") !== dndCorrect.join(""));
+  const altLine = altOrders.length
+    ? `<div class="dnd-answer-alt">Also correct: ${altOrders.map((o) => escapeHtml(o.join(""))).join(" · ")}</div>`
+    : "";
   el("dnd-answer").innerHTML =
-    `<span class="dnd-answer-label">Answer:</span> ${escapeHtml(dndCorrect.join(""))}${pinyinLine}`;
+    `<span class="dnd-answer-label">Answer:</span> ${escapeHtml(dndCorrect.join(""))}${pinyinLine}${altLine}`;
   el("dnd-answer").classList.remove("hidden");
 
   el("dnd-check-btn").classList.add("hidden");
@@ -1354,7 +1431,8 @@ function checkSentenceOrder() {
   el("dnd-next-btn").classList.remove("hidden");
   el("dragdrop-area").querySelectorAll(".dnd-chip").forEach((c) => (c.draggable = false));
 
-  recordResult(state.currentLanguage.id, entry.char, known);
+  // Not tied to the vocab list, so there's no per-character stat to update —
+  // just track this run's score like the other AI-generated-content modes.
   if (known) state.correctCount++;
   else state.missed.push(entry);
 }
@@ -1364,7 +1442,7 @@ function checkSentenceOrder() {
 function submitTyping() {
   const entry = currentEntry();
   const input = el("typing-input").value;
-  const known = normalizePinyin(input) === normalizePinyin(entry.pinyin);
+  const known = normalizePinyinStrict(input) === normalizePinyinStrict(entry.pinyin);
   // How long this answer took, from when the question was shown.
   const elapsedMs = state.questionStart ? Date.now() - state.questionStart : null;
   const feedback = el("typing-feedback");
