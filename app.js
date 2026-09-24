@@ -119,19 +119,57 @@ function statFor(char) {
   return (stats[state.currentLanguage.id] && stats[state.currentLanguage.id][char]) || null;
 }
 
+// A learner-set "I don't really remember this" flag, independent of the
+// auto-tracked accuracy/speed stats. Persisted the same way (localStorage,
+// per language) so it survives across sessions until the learner unflags it.
+function isFlagged(char) {
+  const rec = statFor(char);
+  return Boolean(rec && rec.flagged);
+}
+
+function setFlagged(char, flagged) {
+  const stats = loadStats();
+  stats[state.currentLanguage.id] = stats[state.currentLanguage.id] || {};
+  const rec = stats[state.currentLanguage.id][char] || { seen: 0, wrong: 0 };
+  rec.flagged = flagged;
+  stats[state.currentLanguage.id][char] = rec;
+  saveStats(stats);
+}
+
+// Sentence Builder's questions aren't real vocab words (see recentStoryWords /
+// launchMode), so there's nothing meaningful to flag there — hide the button.
+function updateFlagButton(entry) {
+  const btn = el("flag-word-btn");
+  if (state.mode === "sentence" || !entry || !entry.char) {
+    btn.classList.add("hidden");
+    return;
+  }
+  btn.classList.remove("hidden");
+  btn.classList.toggle("active", isFlagged(entry.char));
+}
+
+function toggleCurrentFlag() {
+  const entry = currentEntry();
+  if (!entry || !entry.char) return;
+  setFlagged(entry.char, !isFlagged(entry.char));
+  updateFlagButton(entry);
+}
+
 // weight favors words you've gotten wrong before, words never quizzed yet,
-// words you're slow to recall, and words from the most recent class session(s)
+// words you're slow to recall, words from the most recent class session(s),
+// and words the learner has manually flagged as hard to remember
 function computeWeight(entry, maxSessionIndex) {
   const rec = statFor(entry.char);
   const wrongBoost = rec ? rec.wrong * 3 : 0;
   const unseenBoost = rec ? 0 : 2;
   const slowBoost = rec ? slownessFactor(rec) * 3 : 0; // slow-but-correct resurfaces
+  const flaggedBoost = rec && rec.flagged ? 8 : 0; // a strong, deliberate boost
   let recencyBoost = 0;
   if (entry.sessionIndex >= 0 && maxSessionIndex >= 0) {
     if (entry.sessionIndex === maxSessionIndex) recencyBoost = 4;
     else if (entry.sessionIndex === maxSessionIndex - 1) recencyBoost = 2;
   }
-  return 1 + wrongBoost + unseenBoost + slowBoost + recencyBoost;
+  return 1 + wrongBoost + unseenBoost + slowBoost + flaggedBoost + recencyBoost;
 }
 
 // ---------- parsing ----------
@@ -253,6 +291,8 @@ function bindStaticEvents() {
   document.querySelectorAll(".mode-card").forEach((btn) => {
     btn.addEventListener("click", () => launchMode(btn.dataset.mode));
   });
+
+  el("flag-word-btn").addEventListener("click", toggleCurrentFlag);
 
   el("flip-btn").addEventListener("click", flipFlashcard);
   document.querySelectorAll(".fc-rate-btn").forEach((btn) => {
@@ -460,6 +500,8 @@ function renderQuestion() {
   // Timestamp used to measure how long the learner takes to answer (used by the
   // typing mode's timing-based remembering score).
   state.questionStart = Date.now();
+
+  updateFlagButton(entry);
 
   if (state.mode === "flashcard") {
     el("quiz-prompt").className = "prompt";
@@ -1492,7 +1534,7 @@ function showResults() {
     state.missed.forEach((e) => {
       const chip = document.createElement("span");
       chip.className = "missed-chip";
-      chip.textContent = `${e.char} ${e.pinyin}`;
+      chip.textContent = `${isFlagged(e.char) ? "🚩 " : ""}${e.char} ${e.pinyin}`;
       missedContainer.appendChild(chip);
     });
   }
@@ -1526,7 +1568,7 @@ function renderRememberingLevels() {
     row.className = "remembering-row";
     const tier = level >= 75 ? "strong" : level >= 45 ? "medium" : "weak";
     row.innerHTML =
-      `<span class="rem-word">${escapeHtml(e.char)} <span class="rem-pinyin">${escapeHtml(e.pinyin)}</span></span>` +
+      `<span class="rem-word">${isFlagged(e.char) ? "🚩 " : ""}${escapeHtml(e.char)} <span class="rem-pinyin">${escapeHtml(e.pinyin)}</span></span>` +
       `<span class="rem-bar"><span class="rem-fill ${tier}" style="width:${level}%"></span></span>` +
       `<span class="rem-pct">${level}%</span>`;
     container.appendChild(row);
