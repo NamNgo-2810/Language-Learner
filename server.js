@@ -328,7 +328,26 @@ function sameChunkMultiset(a, b) {
   return sortedA.every((v, i) => v === sortedB[i]);
 }
 
+// A static, near-identical prompt every call nudges the model toward its single
+// most likely ("canonical") completion, which is why the same sentence kept
+// coming back turn after turn. Randomizing the topic and HSK level per call —
+// and naming the trap outright — breaks that collapse and keeps sentences varied.
+const PRACTICE_SENTENCE_TOPICS = [
+  "family", "food", "weather", "school", "work", "shopping", "travel", "sports",
+  "animals", "hobbies", "friends", "daily schedule", "health", "technology",
+  "seasons", "home and furniture", "transportation", "emotions", "clothing",
+  "music", "movies", "nature", "cooking", "holidays", "money", "directions",
+  "pets", "a birthday party", "a phone call", "the weekend",
+];
+
+function randomPracticeTopic() {
+  return PRACTICE_SENTENCE_TOPICS[Math.floor(Math.random() * PRACTICE_SENTENCE_TOPICS.length)];
+}
+
 async function generatePracticeSentence() {
+  const topic = randomPracticeTopic();
+  const hskLevel = 1 + Math.floor(Math.random() * 4); // 1-4, varies the complexity too
+
   const message = await anthropic.messages.create({
     model: "claude-opus-5",
     max_tokens: 500,
@@ -350,12 +369,15 @@ async function generatePracticeSentence() {
       },
     },
     system:
-      "You write one short, simple Mandarin Chinese sentence (HSK 1-3 level) for a sentence-ordering exercise. Pick any everyday topic — vary it each time. " +
+      "You write one short Mandarin Chinese sentence for a sentence-ordering exercise, at approximately the HSK level given in the request. " +
+      "Write about the given topic specifically — don't default to a generic or textbook-cliché sentence (e.g. avoid reusing things like 我是学生, 你好吗, 我爱你, 今天天气很好). Every call gets a different topic, so make the sentence actually reflect it, with concrete, specific content rather than the blandest possible phrasing. " +
       "Then split that exact sentence into its natural word-level chunks, in order — each chunk is a word or short unit (punctuation may stay attached to the preceding chunk). " +
       "The chunks concatenated in order MUST exactly equal the sentence, with no characters added or removed. Aim for between 3 and 8 chunks. " +
       "Some sentences allow more than one grammatically correct word order with the same meaning (e.g. moving a time word, an adverb, or an object). If so, list every valid ordering of those exact chunks as `validOrders` (each entry is the full array of chunks in one valid order), including the original order. If there's genuinely only one correct order, `validOrders` should contain just that one ordering. " +
       "Reply with the Chinese sentence, the ordered chunks, and the valid orderings — no pinyin, no translation, no commentary.",
-    messages: [{ role: "user", content: "Generate a new practice sentence." }],
+    messages: [
+      { role: "user", content: `Topic: ${topic}. Target level: HSK ${hskLevel} (1-6 scale). Generate a fresh practice sentence.` },
+    ],
   });
 
   if (message.stop_reason === "refusal") {
