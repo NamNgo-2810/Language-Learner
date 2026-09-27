@@ -6,7 +6,7 @@ const path = require("path");
 const crypto = require("crypto");
 const Anthropic = require("@anthropic-ai/sdk");
 const sheets = require("./sheets");
-const { toPinyin } = require("./pinyin");
+const { toPinyin, pinyinVariants } = require("./pinyin");
 
 const ROOT = __dirname;
 const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
@@ -122,7 +122,8 @@ function handleGetLanguages(req, res) {
 
 // GET /api/words?languageId=xxx — returns the language's words from its sheet
 // as parsed entries: [{ char, pinyin, sentence, sessionIndex, sessionLabel,
-// chietu, rowNumber }].
+// chietu, rowNumber, pinyinVariants? }]. Multi-character words also carry
+// pinyinVariants (see pinyin.js) for use as multiple-choice distractors.
 function handleGetWords(req, res, query) {
   if (!sheets.isConfigured()) {
     return sendJSON(res, 500, {
@@ -137,7 +138,13 @@ function handleGetWords(req, res, query) {
 
   sheets
     .readEntries(target.sheetId, target.tab)
-    .then((entries) => sendJSON(res, 200, { ok: true, entries }))
+    .then((entries) => {
+      entries.forEach((e) => {
+        const variants = pinyinVariants(e.char, e.pinyin);
+        if (variants.length) e.pinyinVariants = variants;
+      });
+      sendJSON(res, 200, { ok: true, entries });
+    })
     .catch((err) => sendJSON(res, 502, { error: err.message || "could not read sheet" }));
 }
 
@@ -233,7 +240,15 @@ function handleAddWord(req, res) {
         session: today,
         chietu,
       });
-      sendJSON(res, 200, { ok: true, char, pinyin, newSession, sessionLabel: today, chietu: chietu || null });
+      sendJSON(res, 200, {
+        ok: true,
+        char,
+        pinyin,
+        newSession,
+        sessionLabel: today,
+        chietu: chietu || null,
+        pinyinVariants: pinyinVariants(char, pinyin),
+      });
     } catch (err) {
       sendJSON(res, 502, { error: err.message || "write failed" });
     }
@@ -329,24 +344,121 @@ function sameChunkMultiset(a, b) {
 }
 
 // A static, near-identical prompt every call nudges the model toward its single
-// most likely ("canonical") completion, which is why the same sentence kept
-// coming back turn after turn. Randomizing the topic and HSK level per call —
-// and naming the trap outright — breaks that collapse and keeps sentences varied.
-const PRACTICE_SENTENCE_TOPICS = [
-  "family", "food", "weather", "school", "work", "shopping", "travel", "sports",
-  "animals", "hobbies", "friends", "daily schedule", "health", "technology",
-  "seasons", "home and furniture", "transportation", "emotions", "clothing",
-  "music", "movies", "nature", "cooking", "holidays", "money", "directions",
-  "pets", "a birthday party", "a phone call", "the weekend",
+// most likely ("canonical") completion, and any example listed in a prompt
+// tends to get copied verbatim. So the prompts carry no examples at all:
+// instead each call draws a random scenario (setting x character x situation
+// x tone — hundreds of thousands of combinations) and, for sentences, a random
+// grammar pattern, and hands the model exactly one of each.
+const SCENARIO_SETTINGS = [
+  "a night market", "a hospital waiting room", "a train station at rush hour", "a small noodle shop",
+  "a university dormitory", "a rainy bus stop", "a village wedding", "a supermarket checkout",
+  "a hotel front desk", "a mountain hiking trail", "a barber shop", "a public library",
+  "a fishing boat", "a kindergarten classroom", "a job interview", "an apartment on moving day",
+  "a karaoke room", "a farm at harvest time", "a lost-and-found office", "an airport after a delayed flight",
+  "a tea house", "a gym", "a flower shop", "a car repair garage", "a family dumpling-making evening",
+  "a phone repair stall", "a beach at sunset", "a museum", "a cooking class", "a pharmacy late at night",
+  "a park early in the morning", "a bookstore café", "a ski resort", "a taxi", "an office before a holiday",
+  "a bakery", "a zoo", "a riverside during the Dragon Boat Festival", "a sleeper train", "a cinema",
+  "a wet market", "a driving school", "a dentist's office", "a school sports day", "a rooftop garden",
+  "a laundromat", "a hot-pot restaurant", "a bank", "a small-town post office", "a high-speed train",
 ];
 
-function randomPracticeTopic() {
-  return PRACTICE_SENTENCE_TOPICS[Math.floor(Math.random() * PRACTICE_SENTENCE_TOPICS.length)];
+const SCENARIO_CHARACTERS = [
+  "a retired teacher", "a delivery rider", "two old classmates who meet by chance", "a nervous new employee",
+  "a grandmother and her grandson", "a street musician", "a foreign exchange student", "a doctor on a night shift",
+  "a cat owner", "a taxi driver", "a restaurant cook", "a shy high-school student", "a pair of twins",
+  "a bus driver", "a farmer", "a young married couple", "a lost tourist", "a kid who wants a puppy",
+  "a busy mother of three", "a noisy neighbor", "a shop owner", "a football coach", "a photographer",
+  "a village doctor", "a programmer who rarely leaves home", "a police officer", "a mail carrier",
+  "a university professor", "a small child on the first day of school", "a painter", "a hairdresser",
+  "an elderly couple", "a pair of roommates", "a nurse", "a waiter", "a boss and an assistant",
+];
+
+const SCENARIO_SITUATIONS = [
+  "something important gets lost", "two words that sound alike cause a misunderstanding",
+  "a surprise party plan goes wrong", "someone is late for something important", "an unexpected guest arrives",
+  "friends make a bet", "the power goes out", "someone tries to learn a new skill", "the wrong order arrives",
+  "a secret comes out", "bad weather ruins the plan", "someone gets sick at the worst time", "a first date",
+  "a competition", "someone has to apologize", "an old letter is found", "a pet runs away",
+  "a phone battery dies", "someone moves to a new city", "a lucky coincidence", "a gift nobody likes",
+  "someone is saving money for something", "an argument about something small", "helping a stranger",
+  "cooking a big meal for guests", "a job offer in another city", "a lost wallet is returned",
+  "a mistake at work", "someone faces a fear", "a family recipe", "shopping for a present",
+  "planning a trip", "a long-awaited reunion", "a noisy night with no sleep", "a broken appliance",
+  "waiting in a very long line", "a missed train", "a haircut that goes wrong",
+];
+
+const SCENARIO_TONES = [
+  "funny", "warm and heartfelt", "a little suspenseful", "bittersweet", "light-hearted",
+  "calm and everyday", "mysterious", "romantic", "dramatic", "with a twist at the end",
+];
+
+// Grammar patterns for the sentence builder, each tagged with the HSK level it
+// becomes appropriate at. Named in English only, so there's no sample sentence
+// for the model to copy.
+const SENTENCE_PATTERNS = [
+  { level: 1, pattern: "a statement using 很 + adjective" },
+  { level: 1, pattern: "a yes/no question ending in 吗" },
+  { level: 1, pattern: "a question with a question word (什么, 哪儿, 谁, 几, 怎么)" },
+  { level: 1, pattern: "a negative sentence with 不 or 没" },
+  { level: 1, pattern: "a sentence with 在 + place + action" },
+  { level: 1, pattern: "a sentence that starts with a time word" },
+  { level: 1, pattern: "a sentence with 想 or 要 + verb" },
+  { level: 2, pattern: "a completed action with 了" },
+  { level: 2, pattern: "an experience with 过" },
+  { level: 2, pattern: "an action in progress with 正在...呢" },
+  { level: 2, pattern: "a comparison with 比" },
+  { level: 2, pattern: "a cause and effect with 因为...所以" },
+  { level: 2, pattern: "a suggestion ending in 吧" },
+  { level: 2, pattern: "an emphasis structure with 是...的" },
+  { level: 3, pattern: "a 把 sentence" },
+  { level: 3, pattern: "a passive sentence with 被" },
+  { level: 3, pattern: "a condition with 如果...就" },
+  { level: 3, pattern: "a contrast with 虽然...但是" },
+  { level: 3, pattern: "a change over time with 越来越" },
+  { level: 3, pattern: "two simultaneous actions with 一边...一边" },
+  { level: 3, pattern: "a verb with a result complement (完, 到, 好, 懂)" },
+  { level: 4, pattern: "a sentence with 不但...而且" },
+  { level: 4, pattern: "a sentence with 连...都/也" },
+  { level: 4, pattern: "a condition with 只要...就" },
+  { level: 4, pattern: "a concession with 即使...也" },
+];
+
+function pick(list) {
+  return list[Math.floor(Math.random() * list.length)];
 }
 
-async function generatePracticeSentence() {
-  const topic = randomPracticeTopic();
+function randomScenario() {
+  return {
+    setting: pick(SCENARIO_SETTINGS),
+    character: pick(SCENARIO_CHARACTERS),
+    situation: pick(SCENARIO_SITUATIONS),
+    tone: pick(SCENARIO_TONES),
+  };
+}
+
+// `words` (optional) are 1-2 of the learner's words the sentence should use;
+// `avoid` are sentences already shown this session, so the model won't repeat
+// them. Both are chosen client-side.
+async function generatePracticeSentence(words = [], avoid = []) {
   const hskLevel = 1 + Math.floor(Math.random() * 4); // 1-4, varies the complexity too
+  const topic = Math.random() < 0.5 ? pick(SCENARIO_SETTINGS) : pick(SCENARIO_SITUATIONS);
+  const pattern = pick(SENTENCE_PATTERNS.filter((p) => p.level <= hskLevel)).pattern;
+
+  const lines = [
+    `Topic: ${topic}.`,
+    `Target level: HSK ${hskLevel} (1-6 scale).`,
+    `Sentence structure: ${pattern}.`,
+  ];
+  if (words.length) {
+    lines.push(
+      `Use ${words.length > 1 ? "at least one of these words" : "this word"} from the learner's vocabulary: ` +
+        words.map((w) => `${w.char} (${w.pinyin})`).join(", ") + "."
+    );
+  }
+  if (avoid.length) {
+    lines.push(`Sentences the learner has already seen — write something clearly different from all of them: ${avoid.join(" / ")}`);
+  }
 
   const message = await anthropic.messages.create({
     model: "claude-opus-5",
@@ -370,14 +482,13 @@ async function generatePracticeSentence() {
     },
     system:
       "You write one short Mandarin Chinese sentence for a sentence-ordering exercise, at approximately the HSK level given in the request. " +
-      "Write about the given topic specifically — don't default to a generic or textbook-cliché sentence (e.g. avoid reusing things like 我是学生, 你好吗, 我爱你, 今天天气很好). Every call gets a different topic, so make the sentence actually reflect it, with concrete, specific content rather than the blandest possible phrasing. " +
+      "The request gives a topic, a grammar structure, and possibly words from the learner's vocabulary. Write a concrete, specific sentence about that topic using that structure, rather than the blandest textbook phrasing. " +
+      "Using the learner's word matters most: if the structure can't fit naturally with it, use a different structure at the same level. " +
       "Then split that exact sentence into its natural word-level chunks, in order — each chunk is a word or short unit (punctuation may stay attached to the preceding chunk). " +
       "The chunks concatenated in order MUST exactly equal the sentence, with no characters added or removed. Aim for between 3 and 8 chunks. " +
       "Some sentences allow more than one grammatically correct word order with the same meaning (e.g. moving a time word, an adverb, or an object). If so, list every valid ordering of those exact chunks as `validOrders` (each entry is the full array of chunks in one valid order), including the original order. If there's genuinely only one correct order, `validOrders` should contain just that one ordering. " +
       "Reply with the Chinese sentence, the ordered chunks, and the valid orderings — no pinyin, no translation, no commentary.",
-    messages: [
-      { role: "user", content: `Topic: ${topic}. Target level: HSK ${hskLevel} (1-6 scale). Generate a fresh practice sentence.` },
-    ],
+    messages: [{ role: "user", content: lines.join("\n") }],
   });
 
   if (message.stop_reason === "refusal") {
@@ -421,13 +532,31 @@ function handleGeneratePracticeSentence(req, res) {
       error: "ANTHROPIC_API_KEY is not set on the server — export it before running npm start",
     });
   }
-  // No request body fields are needed anymore (the sentence isn't anchored to
-  // a vocabulary word), but drain the request stream to be a well-behaved
-  // handler for clients that still send a body.
-  req.on("data", () => {});
+  let body = "";
+  req.on("data", (chunk) => {
+    body += chunk;
+    if (body.length > 2e4) req.destroy();
+  });
   req.on("end", async () => {
+    let data;
     try {
-      const result = await generatePracticeSentence();
+      data = body ? JSON.parse(body) : {};
+    } catch {
+      return sendJSON(res, 400, { error: "invalid JSON" });
+    }
+    const words = (Array.isArray(data.words) ? data.words : [])
+      .map((w) => ({
+        char: String((w && w.char) || "").trim(),
+        pinyin: String((w && w.pinyin) || "").trim(),
+      }))
+      .filter((w) => w.char && w.pinyin)
+      .slice(0, 3);
+    const avoid = (Array.isArray(data.avoid) ? data.avoid : [])
+      .map((s) => String(s || "").replace(/[\r\n]/g, "").trim())
+      .filter(Boolean)
+      .slice(-15);
+    try {
+      const result = await generatePracticeSentence(words, avoid);
       sendJSON(res, 200, { ok: true, ...result });
     } catch (err) {
       sendJSON(res, 502, { error: err.message || "generation failed" });
@@ -699,10 +828,23 @@ function shuffle(array) {
   return result;
 }
 
+// `words` carry a `focus` flag: focus words are the learner's newest ones and
+// should all be used; the rest are optional review words. The scenario is
+// drawn server-side (see randomScenario) so the premise changes every call.
 async function generateReviewStory(words, hskLevel, length, format) {
-  const wordList = shuffle(words)
-    .map((w) => `${w.char} (${w.pinyin})`)
-    .join(", ");
+  const listOf = (ws) => shuffle(ws).map((w) => `${w.char} (${w.pinyin})`).join(", ");
+  const focus = words.filter((w) => w.focus);
+  const others = words.filter((w) => !w.focus);
+  const scenario = randomScenario();
+
+  const lines = [
+    `Setting: ${scenario.setting}.`,
+    `${format === "conversation" ? "Speakers include" : "Main character"}: ${scenario.character}.`,
+    `What happens: ${scenario.situation}.`,
+    `Tone: ${scenario.tone}.`,
+  ];
+  if (focus.length) lines.push(`Focus words (just learned — use every one of these): ${listOf(focus)}`);
+  if (others.length) lines.push(`Review words (use as many as fit naturally): ${listOf(others)}`);
 
   const message = await anthropic.messages.create({
     model: "claude-opus-5",
@@ -725,12 +867,10 @@ async function generateReviewStory(words, hskLevel, length, format) {
           `Aim for about ${length} lines of dialogue. Prefix each line with the speaker, e.g. "A：" and "B：", each line on its own line. `
         : `You write a short story in Mandarin Chinese at approximately HSK level ${hskLevel} (on the 1-6 scale, where 1 is absolute beginner and 6 is advanced) — keep the vocabulary and grammar at or below that level. ` +
           `Aim for about ${length} sentence${length === 1 ? "" : "s"}. `) +
-      "Naturally weave in as many of the learner's vocabulary words as fit comfortably at that level — you don't have to use all of them, and you may freely use other words the text needs. Never force an awkward line just to include a word. " +
-      "Invent a fresh, specific setting, genre, and cast each time — pick something unexpected (e.g. a heist, a talking animal, a sports match, a mystery, sci-fi, historical drama) rather than defaulting to the same everyday-life scenario. Surprise the learner; avoid clichés and repeating premises you'd typically reach for. " +
+      "Build it on the setting, character, situation and tone given in the request — follow that scenario rather than substituting a premise of your own, and give it concrete, specific details. " +
+      "Use every focus word (they're the words the learner just learned); for the review words, weave in as many as fit comfortably at that level. You may freely use other words the text needs, but never force an awkward line just to include a word. " +
       "Reply with the Chinese characters only — no pinyin, no translation, no extra commentary.",
-    messages: [
-      { role: "user", content: `The learner's vocabulary words: ${wordList}` },
-    ],
+    messages: [{ role: "user", content: lines.join("\n") }],
   });
 
   if (message.stop_reason === "refusal") {
@@ -768,6 +908,7 @@ function handleGenerateReviewStory(req, res) {
       .map((w) => ({
         char: String((w && w.char) || "").trim(),
         pinyin: String((w && w.pinyin) || "").trim(),
+        focus: Boolean(w && w.focus),
       }))
       .filter((w) => w.char && w.pinyin);
 

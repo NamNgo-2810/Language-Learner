@@ -114,6 +114,8 @@ You can add words two ways:
 - **In the app:** use **+ Add new characters** on the mode-select screen. Type the character; the **pinyin fills in automatically** and you can optionally add an example sentence. On save it's written as a new row with today's date in `session`.
 - **Directly in the sheet:** add rows by hand. You can leave `pinyin` blank and fill it later, but the app expects both `char` and `pinyin` to show a word, so it's easiest to add words through the app and let it generate the pinyin.
 
+**Multi-character words** (音乐, 银行, 长大…) can be added as one entry, alongside single characters. The pinyin is read in context (音乐 → yīn yuè, not yīn lè). Multiple-choice options always match the answer's length, so a two-character word only competes with other two-character options and doesn't stand out. When a word contains a character with several readings, one of the wrong options uses the other reading (e.g. `yīn lè` for 音乐), which tests exactly that trap. In **Type the Pinyin**, spaces between syllables are optional (`yin1yue4` works).
+
 ## Add a new language
 
 1. Add a new tab to your spreadsheet named after the language id (e.g. `japanese`).
@@ -127,17 +129,22 @@ You can add words two ways:
 
 - **Flashcards** – see the character, reveal the reading, self-rate.
 - **Character → Pinyin** / **Pinyin → Character** – multiple choice.
-- **Type the Pinyin** – free-typed recall (tone marks/numbers optional, e.g. `ni` or `ni3` both match `nǐ`).
+- **Type the Pinyin** – free-typed recall, graded with tones (`ni3` or `nǐ` match `nǐ`; spaces between syllables optional).
 - **Writing Practice** – see the pinyin only, write the character in your notebook, use **Hint** for a blurred peek at the character before **Show answer** reveals it fully, then self-rate. An optional **Show sentence hint** button gives a fill-in-the-blank sentence as an extra clue.
 - **Confusables** – only for characters that share a pinyin with at least one other character in your list (e.g. 是/事/世, all `shì`). Shows the pinyin (plus sentence, if one exists) and asks you to pick the right character from among its actual look-alikes, instead of random distractors.
 - **Sentence Practice** – shows one of your example sentences with the target word blanked out; you pick the character that fills the blank. Only includes words that have a sentence attached, so add some via the **+ Add new characters** screen to unlock it.
-- **Review Story** – asks Claude to write a short story (a few sentences) that naturally weaves in as many of your words as it can, using the same smart-prioritized word set as the quizzes (respects the **Study everything** toggle too — check it to try to use every word instead of the capped set). Shows which words made it in and which didn't, with **🔄 Regenerate** for a fresh attempt. Requires `ANTHROPIC_API_KEY` (see above).
+- **Sentence Builder** – drag shuffled chunks of a generated sentence back into order. Each sentence is built around one of your newest words (cycled so each gets a turn), sometimes plus another word from your list, with a random topic and grammar pattern for its HSK level. Recent sentences are remembered so they aren't repeated.
+- **Review Story** – asks Claude to write a short story or conversation from a fresh random mix of your words: up to 5 of your newest words (which it must use) plus a random handful of others, weighted toward the weak ones. The scenario (setting, character, what happens, tone) is drawn at random for every story, so premises don't repeat. Afterwards it shows how many picked words made it in and any new words it skipped. Check **Study everything** to send your whole list instead. Requires `ANTHROPIC_API_KEY` (see above).
 
 ## Smart prioritization
 
-By default, quizzes don't run through every word — each session is capped at ~20 words, weighted toward:
-- words you've gotten wrong before (tracked in browser localStorage),
-- words you haven't been quizzed on yet,
-- words from your most recent class session(s), so newly-added characters get extra rounds.
+By default, quizzes don't run through every word. Each session is capped at 20 words, split into:
+- **~40% new words** – from your two most recent class sessions,
+- **~40% weak words** – ones you've flagged 🚩, missed recently, or have a low remembering score,
+- **the rest** – older words you know, least-recently-seen first, so they don't fade.
+
+If one group is short, the spare slots go to new words first, then weak ones. "Missed recently" uses a running error rate that favors your latest answers, so a word you used to miss stops dominating once you've gotten it right a few times in a row (stats live in browser localStorage).
+
+In **Flashcards**, a card you mark as not known comes back once more about 4 cards later in the same run.
 
 Check **Study everything** on the mode-select screen to ignore the cap and prioritization and run through the full list instead.

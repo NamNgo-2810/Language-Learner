@@ -81,8 +81,15 @@ function recordResult(languageId, char, known, elapsedMs) {
   const stats = loadStats();
   stats[languageId] = stats[languageId] || {};
   const rec = stats[languageId][char] || { seen: 0, wrong: 0 };
+  const hadHistory = rec.seen > 0;
+  const prevErr = recentErrorRate(rec);
   rec.seen += 1;
   if (!known) rec.wrong += 1;
+  // Recent-weighted error rate: each answer moves it 40% of the way toward
+  // 1 (missed) or 0 (knew it), so a few correct answers in a row cool down a
+  // word you used to miss, and a fresh miss heats it right back up.
+  const miss = known ? 0 : 1;
+  rec.errEma = hadHistory ? prevErr * 0.6 + miss * 0.4 : miss;
 
   if (typeof elapsedMs === "number" && isFinite(elapsedMs) && elapsedMs > 0) {
     const clamped = Math.min(elapsedMs, 60000); // ignore afk-long outliers
@@ -94,6 +101,14 @@ function recordResult(languageId, char, known, elapsedMs) {
   rec.lastSeen = Date.now();
   stats[languageId][char] = rec;
   saveStats(stats);
+}
+
+// 0 (never missed lately) .. 1 (missed every recent time). Records from before
+// errEma existed fall back to their lifetime miss ratio.
+function recentErrorRate(rec) {
+  if (!rec || !rec.seen) return 0;
+  if (typeof rec.errEma === "number") return rec.errEma;
+  return rec.wrong / rec.seen;
 }
 
 // 0 (fast) .. 1 (slow) from an average response time; 0 if never timed.
@@ -136,8 +151,8 @@ function setFlagged(char, flagged) {
   saveStats(stats);
 }
 
-// Sentence Builder's questions aren't real vocab words (see recentStoryWords /
-// launchMode), so there's nothing meaningful to flag there — hide the button.
+// Sentence Builder's questions are whole generated sentences, not vocab words
+// (see launchMode), so there's nothing meaningful to flag there — hide the button.
 function updateFlagButton(entry) {
   const btn = el("flag-word-btn");
   if (state.mode === "sentence" || !entry || !entry.char) {
@@ -160,7 +175,7 @@ function toggleCurrentFlag() {
 // and words the learner has manually flagged as hard to remember
 function computeWeight(entry, maxSessionIndex) {
   const rec = statFor(entry.char);
-  const wrongBoost = rec ? rec.wrong * 3 : 0;
+  const wrongBoost = recentErrorRate(rec) * 8;
   const unseenBoost = rec ? 0 : 2;
   const slowBoost = rec ? slownessFactor(rec) * 3 : 0; // slow-but-correct resurfaces
   const flaggedBoost = rec && rec.flagged ? 8 : 0; // a strong, deliberate boost
@@ -170,6 +185,35 @@ function computeWeight(entry, maxSessionIndex) {
     else if (entry.sessionIndex === maxSessionIndex - 1) recencyBoost = 2;
   }
   return 1 + wrongBoost + unseenBoost + slowBoost + flaggedBoost + recencyBoost;
+}
+
+// "New" = from the two most recent class sessions.
+const RECENT_SESSIONS = 2;
+
+function isRecentEntry(entry, maxIdx = maxSessionIndex(state.entries)) {
+  return entry.sessionIndex >= 0 && entry.sessionIndex > maxIdx - RECENT_SESSIONS;
+}
+
+function recentEntries() {
+  const maxIdx = maxSessionIndex(state.entries);
+  return state.entries.filter((e) => isRecentEntry(e, maxIdx));
+}
+
+// A word you're currently struggling with: flagged, missed recently, or with
+// a low remembering score.
+function isWeak(rec) {
+  if (!rec) return false;
+  if (rec.flagged) return true;
+  if (!rec.seen) return false;
+  return recentErrorRate(rec) >= 0.3 || rememberingLevel(rec) < 60;
+}
+
+// Older, solid words: resurface the ones you haven't seen in longest.
+function reviewWeight(entry) {
+  const rec = statFor(entry.char);
+  if (!rec || !rec.lastSeen) return 4;
+  const days = (Date.now() - rec.lastSeen) / 86400000;
+  return 1 + Math.min(days, 14) / 2;
 }
 
 // ---------- parsing ----------
@@ -280,7 +324,7 @@ function refreshModeScreen() {
   const withSentence = state.entries.filter((e) => e.sentence).length;
   const confusableCount = confusableGroups(state.entries).reduce((sum, g) => sum + g.length, 0);
   el("mode-count").textContent =
-    `${state.entries.length} characters loaded · ${withSentence} with example sentences · ${confusableCount} in confusable pairs`;
+    `${state.entries.length} words loaded · ${withSentence} with example sentences · ${confusableCount} in confusable pairs`;
 }
 
 function bindStaticEvents() {
@@ -411,9 +455,19 @@ function launchMode(mode) {
     }
     beginQuiz(mode, pool);
   } else if (mode === "sentence") {
-    // Not tied to the learner's vocabulary — each question is a freshly
-    // generated standalone sentence, so the queue is just placeholders.
-    const placeholders = Array.from({ length: SENTENCE_SESSION_LENGTH }, (_, i) => ({ id: i }));
+    // Each question is a freshly generated sentence built around 1-2 of the
+    // learner's words: one cycled through the newest words (so each new word
+    // gets its turn instead of the same one repeating), sometimes plus one
+    // drawn from the whole list.
+    const recentCycle = shuffle(recentEntries());
+    const anyCycle = weightedShuffle(state.entries);
+    const placeholders = Array.from({ length: SENTENCE_SESSION_LENGTH }, (_, i) => {
+      const words = [];
+      if (recentCycle.length) words.push(recentCycle[i % recentCycle.length]);
+      const extra = anyCycle.length ? anyCycle[i % anyCycle.length] : null;
+      if (extra && !words.includes(extra) && (!words.length || Math.random() < 0.6)) words.push(extra);
+      return { id: i, words: words.map((w) => ({ char: w.char, pinyin: w.pinyin })) };
+    });
     beginQuiz(mode, placeholders, { skipCap: true });
   } else {
     beginQuiz(mode, state.entries);
@@ -422,9 +476,10 @@ function launchMode(mode) {
 
 // ---------- quiz setup ----------
 
-function weightedShuffle(entries) {
+function weightedShuffle(entries, weightFn) {
   const maxIdx = maxSessionIndex(state.entries);
-  const withWeight = entries.map((e) => ({ e, w: computeWeight(e, maxIdx) }));
+  const weigh = weightFn || ((e) => computeWeight(e, maxIdx));
+  const withWeight = entries.map((e) => ({ e, w: weigh(e) }));
   const result = [];
   const pool = [...withWeight];
   while (pool.length) {
@@ -441,15 +496,58 @@ function weightedShuffle(entries) {
   return result;
 }
 
+// Share of a capped session reserved for each bucket; the rest goes to older
+// words you know, least-recently-seen first. Unused share spills over.
+const RECENT_SHARE = 0.4;
+const WEAK_SHARE = 0.4;
+
+// Builds a capped session from explicit buckets instead of one weighted draw
+// over the whole list — with a long list, 150 old words at weight ~1 would
+// otherwise still outvote 15 new words at weight ~5.
+function buildStudyQueue(entries, cap) {
+  if (entries.length <= cap) return weightedShuffle(entries);
+  const maxIdx = maxSessionIndex(state.entries);
+  const recent = [];
+  const weak = [];
+  const rest = [];
+  entries.forEach((e) => {
+    if (isRecentEntry(e, maxIdx)) recent.push(e);
+    else if (isWeak(statFor(e.char))) weak.push(e);
+    else rest.push(e);
+  });
+
+  const recentPicks = weightedShuffle(recent);
+  const weakPicks = weightedShuffle(weak);
+  const restPicks = weightedShuffle(rest, reviewWeight);
+  const nRecent = Math.round(cap * RECENT_SHARE);
+  const nWeak = Math.round(cap * WEAK_SHARE);
+  const picked = [
+    ...recentPicks.slice(0, nRecent),
+    ...weakPicks.slice(0, nWeak),
+    ...restPicks.slice(0, cap - nRecent - nWeak),
+  ];
+  // Top up from whatever buckets still have words, new and weak first.
+  const leftovers = [
+    ...recentPicks.slice(nRecent),
+    ...weakPicks.slice(nWeak),
+    ...restPicks.slice(cap - nRecent - nWeak),
+  ];
+  for (const e of leftovers) {
+    if (picked.length >= cap) break;
+    picked.push(e);
+  }
+  return shuffle(picked);
+}
+
 function beginQuiz(mode, entries, { skipCap = false } = {}) {
   if (!entries.length) return;
   const studyAll = skipCap || el("study-all-toggle").checked;
-  let queue = weightedShuffle(entries);
-  if (!studyAll) queue = queue.slice(0, SESSION_CAP);
+  const queue = studyAll ? weightedShuffle(entries) : buildStudyQueue(entries, SESSION_CAP);
 
   state.mode = mode;
   state.queue = queue;
   state.index = 0;
+  state.requeued = new Set();
   state.missed = [];
   state.correctCount = 0;
   showScreen("quiz");
@@ -597,6 +695,25 @@ function normalizePinyinStrict(str) {
     .join(" ");
 }
 
+// Typed answers for multi-syllable words often come without spaces. Numbered
+// input ("yin1yue4") is split after each tone number; unspaced tone-mark input
+// ("yīnyuè") is checked as same letters + same tones in the same order.
+function tonesOf(str) {
+  let tones = "";
+  for (const ch of str.normalize("NFD")) {
+    if (TONE_MARK_TO_NUMBER[ch]) tones += TONE_MARK_TO_NUMBER[ch];
+    else if (/[1-4]/.test(ch)) tones += ch;
+  }
+  return tones;
+}
+
+function pinyinAnswerMatches(input, expected) {
+  const spaced = input.trim().replace(/([1-5])(?=[a-zü])/gi, "$1 ");
+  if (normalizePinyinStrict(spaced) === normalizePinyinStrict(expected)) return true;
+  if (/\s/.test(input.trim())) return false;
+  return normalizePinyin(input) === normalizePinyin(expected) && tonesOf(input) === tonesOf(expected);
+}
+
 // ---------- flashcard ----------
 
 function flipFlashcard() {
@@ -676,11 +793,23 @@ function ensureChietu(entry) {
   return entry._chietuPromise;
 }
 
+// How many cards later a missed flashcard comes back within the same run.
+const RELEARN_GAP = 4;
+
 function answerFlashcard(known) {
   const entry = currentEntry();
   recordResult(state.currentLanguage.id, entry.char, known);
-  if (known) state.correctCount++;
-  else state.missed.push(entry);
+  if (known) {
+    state.correctCount++;
+  } else {
+    if (!state.missed.includes(entry)) state.missed.push(entry);
+    // Show a missed card once more a few cards later, while it's still fresh.
+    if (!state.requeued.has(entry)) {
+      state.requeued.add(entry);
+      const at = Math.min(state.index + 1 + RELEARN_GAP, state.queue.length);
+      state.queue.splice(at, 0, entry);
+    }
+  }
   advance();
 }
 
@@ -732,20 +861,22 @@ function escapeHtml(str) {
 // speak-along highlighter can map spoken character offsets back to the DOM.
 let currentStoryText = "";
 
-// Recently-added words make for more varied, less repetitive stories than
-// drawing from the whole (ever-growing) vocabulary list every time. Falls
-// back to the full list if nothing was added in the window, so the feature
-// still works for someone returning after a longer break.
-const STORY_RECENCY_DAYS = 7;
+// Each story gets a fresh random handful of words rather than the same list
+// every time: up to STORY_FOCUS_MAX "focus" words from the newest sessions
+// (the model is told to use all of them), topped up with a weighted-random
+// mix from the whole list (favoring weak words). Longer stories get more.
+const STORY_FOCUS_MAX = 5;
 
-function recentStoryWords() {
-  const cutoff = Date.now() - STORY_RECENCY_DAYS * 24 * 60 * 60 * 1000;
-  const recent = state.entries.filter((e) => {
-    if (!e.sessionLabel) return false;
-    const t = Date.parse(e.sessionLabel);
-    return !Number.isNaN(t) && t >= cutoff;
-  });
-  return recent.length ? recent : state.entries;
+function pickStoryWords(length) {
+  const toWord = (e, focus) => ({ char: e.char, pinyin: e.pinyin, focus });
+  const recent = recentEntries();
+  if (el("study-all-toggle").checked) {
+    return state.entries.map((e) => toWord(e, recent.includes(e)));
+  }
+  const target = Math.min(state.entries.length, Math.max(6, Math.min(16, length * 2 + 2)));
+  const focus = shuffle(recent).slice(0, Math.min(STORY_FOCUS_MAX, Math.ceil(target / 2)));
+  const others = weightedShuffle(state.entries.filter((e) => !focus.includes(e))).slice(0, target - focus.length);
+  return [...focus.map((e) => toWord(e, true)), ...others.map((e) => toWord(e, false))];
 }
 
 function startReviewStory() {
@@ -753,10 +884,11 @@ function startReviewStory() {
   currentStoryText = "";
   el("speak-story-btn").disabled = true;
   el("story-text").textContent = "Choose a difficulty and length, then generate a story.";
-  const words = recentStoryWords();
-  const isRecent = words.length !== state.entries.length;
-  el("story-word-count").textContent = words.length
-    ? `${words.length} word${words.length === 1 ? "" : "s"} ${isRecent ? `added in the last ${STORY_RECENCY_DAYS} days` : "in your list"} to draw from`
+  const n = state.entries.length;
+  el("story-word-count").textContent = n
+    ? el("study-all-toggle").checked
+      ? `Each story tries to use all ${n} words in your list`
+      : `Each story picks a fresh mix: your newest words, plus a random handful of the other ${n} words`
     : "";
   showScreen("story");
 }
@@ -770,17 +902,17 @@ function updateStoryLengthLabel() {
 
 async function generateReviewStory() {
   stopSpeaking();
-  const words = recentStoryWords();
   const btn = el("generate-story-btn");
   const textEl = el("story-text");
 
-  if (!words.length) {
+  if (!state.entries.length) {
     textEl.textContent = "No words to build a story from yet — add some characters first.";
     return;
   }
 
   const hskLevel = Number(el("story-hsk").value) || 3;
   const length = Number(el("story-length").value) || 5;
+  const words = pickStoryWords(length);
   const format = el("story-format").value === "conversation" ? "conversation" : "story";
 
   textEl.textContent = format === "conversation" ? "Generating your conversation..." : "Generating your story...";
@@ -793,7 +925,7 @@ async function generateReviewStory() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         languageId: state.currentLanguage.id,
-        words: words.map((w) => ({ char: w.char, pinyin: w.pinyin })),
+        words,
         hskLevel,
         length,
         format,
@@ -802,6 +934,11 @@ async function generateReviewStory() {
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || "generation failed");
     renderReviewStory(data.story);
+    const used = words.filter((w) => data.story.includes(w.char));
+    const skippedFocus = words.filter((w) => w.focus && !data.story.includes(w.char));
+    el("story-word-count").textContent =
+      `Used ${used.length} of ${words.length} picked words` +
+      (skippedFocus.length ? ` · new words it skipped: ${skippedFocus.map((w) => w.char).join(" ")}` : "");
   } catch (err) {
     textEl.textContent = `Couldn't generate a story: ${err.message}`;
   } finally {
@@ -1128,6 +1265,7 @@ async function submitNewCharacter() {
       sessionIndex: maxSessionIndex(state.entries) + (data.newSession ? 1 : 0),
       sessionLabel: data.sessionLabel || null,
       chietu: data.chietu || null,
+      pinyinVariants: data.pinyinVariants || [],
     });
     feedback.textContent = `Added ${char} ${pinyin}`;
     feedback.className = "correct";
@@ -1150,23 +1288,61 @@ async function submitNewCharacter() {
 
 // ---------- multiple choice ----------
 
-function buildOptions(entry, field, preferredPool) {
-  const usedChars = new Set([entry.char]);
-  const distractors = [];
+function charLength(word) {
+  return [...String(word || "")].length;
+}
 
-  shuffle((preferredPool || []).filter((e) => e.char !== entry.char)).forEach((e) => {
-    if (distractors.length >= 3 || usedChars.has(e.char)) return;
-    distractors.push(e[field]);
-    usedChars.add(e.char);
-  });
-
-  if (distractors.length < 3) {
-    shuffle(state.entries.filter((e) => !usedChars.has(e.char))).forEach((e) => {
-      if (distractors.length >= 3) return;
-      distractors.push(e[field]);
-      usedChars.add(e.char);
+// Fake words of the same length as `entry`, made by swapping one of its
+// characters for a single character from the list. With `homophonesOnly`,
+// only swaps that sound the same (ignoring tone) — 音乐 yīn yuè -> 因乐 —
+// which make the sharpest "which one is it?" distractors.
+function swappedWords(entry, homophonesOnly) {
+  const chars = [...entry.char];
+  const syllables = entry.pinyin.trim().split(/\s+/);
+  if (chars.length < 2 || syllables.length !== chars.length) return [];
+  const singles = state.entries.filter((e) => charLength(e.char) === 1);
+  const result = [];
+  chars.forEach((ch, i) => {
+    singles.forEach((s) => {
+      if (s.char === ch) return;
+      if (homophonesOnly && normalizePinyin(s.pinyin) !== normalizePinyin(syllables[i])) return;
+      const swappedChars = chars.slice();
+      const swappedSyllables = syllables.slice();
+      swappedChars[i] = s.char;
+      swappedSyllables[i] = s.pinyin;
+      result.push({ char: swappedChars.join(""), pinyin: swappedSyllables.join(" ") });
     });
+  });
+  return result;
+}
+
+// Options always have the same shape as the answer — a two-character word only
+// competes with two-character options — so a compound like 音乐 never stands
+// out among single characters. Sources, best first: the caller's preferred
+// pool (confusables), targeted traps (other readings of a polyphonic character
+// for pinyin, same-sounding swaps for characters), real same-length words,
+// then made-up same-length swaps. Any-length words are a last resort.
+function buildOptions(entry, field, preferredPool) {
+  const len = charLength(entry.char);
+  const keyOf = (value) => (field === "pinyin" ? normalizePinyinStrict(value) : value);
+  const seen = new Set([keyOf(entry[field])]);
+  const distractors = [];
+  const add = (value) => {
+    if (distractors.length >= 3 || !value || seen.has(keyOf(value))) return;
+    seen.add(keyOf(value));
+    distractors.push(value);
+  };
+  const sameLength = (e) => charLength(e.char) === len;
+
+  shuffle((preferredPool || []).filter(sameLength)).forEach((e) => add(e[field]));
+  if (field === "pinyin") {
+    shuffle(entry.pinyinVariants || []).slice(0, 2).forEach(add);
+  } else {
+    shuffle(swappedWords(entry, true)).slice(0, 2).forEach((w) => add(w.char));
   }
+  shuffle(state.entries.filter(sameLength)).forEach((e) => add(e[field]));
+  shuffle(swappedWords(entry, false)).forEach((w) => add(w[field]));
+  shuffle(state.entries).forEach((e) => add(e[field]));
 
   return shuffle([entry[field], ...distractors]);
 }
@@ -1255,6 +1431,30 @@ let dndCorrect = [];
 let dndValidOrders = [];
 let dndCorrectPinyin = "";
 
+// The last few generated sentences, kept across visits and sent back to the
+// server so the model avoids repeating them.
+const SENTENCE_HISTORY_KEY = "lang-learner-sentence-history";
+const SENTENCE_HISTORY_MAX = 30;
+
+function loadSentenceHistory() {
+  try {
+    const list = JSON.parse(localStorage.getItem(SENTENCE_HISTORY_KEY));
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberSentence(sentence) {
+  const list = loadSentenceHistory();
+  list.push(sentence);
+  try {
+    localStorage.setItem(SENTENCE_HISTORY_KEY, JSON.stringify(list.slice(-SENTENCE_HISTORY_MAX)));
+  } catch {
+    // ignore — this only helps variety
+  }
+}
+
 async function renderSentenceBuilder(entry) {
   const token = ++currentQuestionToken;
   el("dragdrop-area").classList.remove("hidden");
@@ -1281,7 +1481,7 @@ async function renderSentenceBuilder(entry) {
     const res = await fetch("/api/generate-practice-sentence", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ words: entry.words || [], avoid: loadSentenceHistory().slice(-15) }),
     });
     const data = await res.json();
     if (res.ok && data.ok) {
@@ -1304,6 +1504,7 @@ async function renderSentenceBuilder(entry) {
     return;
   }
 
+  rememberSentence(sentence);
   dndCorrect = chunks.slice();
   dndValidOrders = validOrders;
   dndCorrectPinyin = sentencePinyin;
@@ -1484,7 +1685,7 @@ function checkSentenceOrder() {
 function submitTyping() {
   const entry = currentEntry();
   const input = el("typing-input").value;
-  const known = normalizePinyinStrict(input) === normalizePinyinStrict(entry.pinyin);
+  const known = pinyinAnswerMatches(input, entry.pinyin);
   // How long this answer took, from when the question was shown.
   const elapsedMs = state.questionStart ? Date.now() - state.questionStart : null;
   const feedback = el("typing-feedback");
