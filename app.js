@@ -765,7 +765,7 @@ function ensureHanViet(entry) {
   entry._hanVietPromise = fetch("/api/hanviet", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ char: entry.char }),
+    body: JSON.stringify({ char: entry.char, languageId: state.currentLanguage.id }),
   })
     .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
     .then(({ ok, data }) => {
@@ -1565,6 +1565,7 @@ async function submitNewCharacter() {
       sessionIndex: maxSessionIndex(state.entries) + (data.newSession ? 1 : 0),
       sessionLabel: data.sessionLabel || null,
       chietu: data.chietu || null,
+      hanViet: data.hanViet || null,
       pinyinVariants: data.pinyinVariants || [],
     });
     feedback.textContent = `Added ${char} ${pinyin}`;

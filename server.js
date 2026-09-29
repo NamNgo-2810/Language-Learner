@@ -219,17 +219,17 @@ function handleAddWord(req, res) {
     const target = resolveLanguageTarget(languageId);
     if (target.error) return sendJSON(res, target.status, { error: target.error });
 
-    // Generate the chiết tự breakdown once, up front, so it's cached in the
-    // sheet from the start and never needs to be requested from Claude again.
-    // Best-effort: a failure here (or no API key configured) shouldn't block
-    // adding the word — it can still be generated lazily later.
+    // Generate the chiết tự breakdown and Hán Việt reading once, up front, so
+    // they're cached in the sheet from the start and never need to be
+    // requested from Claude again. Best-effort: a failure here (or no API key
+    // configured) shouldn't block adding the word — either can still be
+    // generated lazily on first flashcard view.
     let chietu = "";
+    let hanViet = "";
     if (anthropic) {
-      try {
-        chietu = (await generateChietu(char)).chietu;
-      } catch {
-        // ignore — will be generated on first flashcard view instead
-      }
+      const [c, h] = await Promise.allSettled([generateChietu(char), generateHanViet(char)]);
+      if (c.status === "fulfilled") chietu = c.value.chietu;
+      if (h.status === "fulfilled") hanViet = h.value.hanViet;
     }
 
     try {
@@ -242,6 +242,7 @@ function handleAddWord(req, res) {
         sentence,
         session: today,
         chietu,
+        hanViet,
       });
       sendJSON(res, 200, {
         ok: true,
@@ -250,6 +251,7 @@ function handleAddWord(req, res) {
         newSession,
         sessionLabel: today,
         chietu: chietu || null,
+        hanViet: hanViet || null,
         pinyinVariants: pinyinVariants(char, pinyin),
       });
     } catch (err) {
@@ -710,30 +712,21 @@ async function generateChietu(char) {
   return { chietu: parsed.chietu };
 }
 
-// POST /api/chietu { languageId, char } — returns the chiết tự breakdown for
-// a character, preferring the cache stored in the word's sheet row (column H)
-// over asking Claude again. Only new characters (no cached value yet) hit the
-// model; the result is then written back to that row so it's cached for
-// every future view, in this session and beyond.
-function handleGenerateChietu(req, res) {
-  let body = "";
-  req.on("data", (chunk) => {
-    body += chunk;
-    if (body.length > 1e4) req.destroy();
-  });
-  req.on("end", async () => {
-    let data;
-    try {
-      data = JSON.parse(body);
-    } catch {
-      return sendJSON(res, 400, { error: "invalid JSON" });
-    }
+// Serves a per-word value that's cached in the word's sheet row (chiết tự in
+// column H, Hán Việt in column I): returns the cached value if there is one,
+// otherwise asks Claude once and writes the result back to that row, so every
+// later view — in this session and beyond — is free.
+//   field    : entry property holding the cached value ("chietu" / "hanViet")
+//   generate : char -> Promise<string>
+//   save     : (sheetId, tab, rowNumber, value) -> Promise
+function handleCachedWordField(req, res, { field, generate, save }) {
+  withJSONBody(req, res, 1e4, async (data) => {
     const char = String(data.char || "").trim();
     const languageId = String(data.languageId || "").trim();
     if (!char) return sendJSON(res, 400, { error: "char is required" });
 
-    // Look up the word's row so we can reuse an already-cached breakdown, or
-    // save a freshly generated one back to it.
+    // Look up the word's row so we can reuse an already-cached value, or save
+    // a freshly generated one back to it.
     let target = null;
     let row = null;
     if (languageId && sheets.isConfigured()) {
@@ -749,8 +742,8 @@ function handleGenerateChietu(req, res) {
       }
     }
 
-    if (row && row.chietu) {
-      return sendJSON(res, 200, { ok: true, chietu: row.chietu });
+    if (row && row[field]) {
+      return sendJSON(res, 200, { ok: true, [field]: row[field] });
     }
 
     if (!anthropic) {
@@ -759,48 +752,37 @@ function handleGenerateChietu(req, res) {
       });
     }
     try {
-      const result = await generateChietu(char);
+      const value = await generate(char);
       if (target && row) {
         try {
-          await sheets.updateChietu(target.sheetId, target.tab, row.rowNumber, result.chietu);
+          await save(target.sheetId, target.tab, row.rowNumber, value);
         } catch {
           // the learner still gets their answer even if the write-back fails;
           // it'll just be regenerated next time
         }
       }
-      sendJSON(res, 200, { ok: true, ...result });
+      sendJSON(res, 200, { ok: true, [field]: value });
     } catch (err) {
       sendJSON(res, 502, { error: err.message || "generation failed" });
     }
   });
 }
 
-function handleGenerateHanViet(req, res) {
-  if (!anthropic) {
-    return sendJSON(res, 500, {
-      error: "ANTHROPIC_API_KEY is not set on the server — export it before running npm start",
-    });
-  }
-  let body = "";
-  req.on("data", (chunk) => {
-    body += chunk;
-    if (body.length > 1e4) req.destroy();
+// POST /api/chietu { languageId, char }
+function handleGenerateChietu(req, res) {
+  handleCachedWordField(req, res, {
+    field: "chietu",
+    generate: async (char) => (await generateChietu(char)).chietu,
+    save: sheets.updateChietu,
   });
-  req.on("end", async () => {
-    let data;
-    try {
-      data = JSON.parse(body);
-    } catch {
-      return sendJSON(res, 400, { error: "invalid JSON" });
-    }
-    const char = String(data.char || "").trim();
-    if (!char) return sendJSON(res, 400, { error: "char is required" });
-    try {
-      const result = await generateHanViet(char);
-      sendJSON(res, 200, { ok: true, ...result });
-    } catch (err) {
-      sendJSON(res, 502, { error: err.message || "generation failed" });
-    }
+}
+
+// POST /api/hanviet { languageId, char }
+function handleGenerateHanViet(req, res) {
+  handleCachedWordField(req, res, {
+    field: "hanViet",
+    generate: async (char) => (await generateHanViet(char)).hanViet,
+    save: sheets.updateHanViet,
   });
 }
 
