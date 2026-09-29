@@ -514,3 +514,103 @@ h2 { font-size: 1.15rem; margin: 0 0 4px; }
   min-width: 3ch;
   text-align: right;
 }
+
+/* write in Chinese */
+.compose-task { text-align: left; padding: 20px; }
+.compose-source {
+  font-size: 1.1rem;
+  line-height: 1.6;
+  margin-top: 10px;
+}
+.compose-targets {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.95rem;
+}
+.compose-label {
+  display: inline-block;
+  min-width: 72px;
+  color: var(--subtle);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.compose-word {
+  display: inline-block;
+  margin: 0 8px 4px 0;
+  padding: 2px 10px;
+  border-radius: 8px;
+  background: var(--border);
+  color: var(--accent);
+  font-weight: 600;
+}
+.compose-word small { color: var(--subtle); font-weight: 400; }
+.compose-input {
+  width: 100%;
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  font-size: 1.2rem;
+  line-height: 1.6;
+  font-family: inherit;
+  resize: vertical;
+}
+.compose-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.compose-feedback {
+  margin-top: 20px;
+  padding: 20px;
+  border-radius: 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+}
+.compose-feedback h3 {
+  font-size: 0.8rem;
+  color: var(--subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 18px 0 6px;
+}
+.compose-summary { margin: 0; line-height: 1.5; }
+.compose-perfect { color: var(--good); margin: 6px 0 0; }
+.compose-error { color: var(--bad); margin: 0; }
+.compose-text {
+  font-size: 1.3rem;
+  line-height: 1.9;
+  white-space: pre-wrap;
+}
+.diff-del {
+  color: var(--bad);
+  text-decoration: line-through;
+  background: rgba(255, 107, 107, 0.12);
+  border-radius: 3px;
+}
+.diff-ins {
+  color: var(--good);
+  text-decoration: none;
+  background: rgba(62, 207, 142, 0.14);
+  border-radius: 3px;
+}
+.compose-issues, .compose-checks {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  line-height: 1.5;
+}
+.issue-cat {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 8px;
+  border-radius: 6px;
+  background: var(--border);
+  color: var(--subtle);
+  font-size: 0.75rem;
+}
+.issue-why { color: var(--subtle); font-size: 0.9rem; margin-top: 2px; }

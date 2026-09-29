@@ -45,6 +45,7 @@ const screens = {
   add: el("screen-add"),
   quiz: el("screen-quiz"),
   story: el("screen-story"),
+  compose: el("screen-compose"),
   results: el("screen-results"),
 };
 
@@ -437,7 +438,16 @@ function bindStaticEvents() {
     showScreen("mode");
   });
 
+  el("compose-new-btn").addEventListener("click", newComposeTask);
+  el("compose-check-btn").addEventListener("click", checkComposition);
+  el("compose-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) checkComposition();
+  });
+  ["compose-kind", "compose-hsk", "compose-lang"].forEach((id) => el(id).addEventListener("change", saveComposePrefs));
+  el("back-from-compose-btn").addEventListener("click", () => showScreen("mode"));
+
   bindPinyinLookup(el("story-text"), ".story-char");
+  bindPinyinLookup(el("compose-feedback"), ".story-char");
   bindPinyinLookup(el("dragdrop-area"), ".dnd-chip");
   bindGlobalPinyinPopupDismiss();
 }
@@ -447,6 +457,8 @@ function bindStaticEvents() {
 function launchMode(mode) {
   if (mode === "story") {
     startReviewStory();
+  } else if (mode === "compose") {
+    startCompose();
   } else if (mode === "confusables") {
     const pool = confusableGroups(state.entries).flat();
     if (!pool.length) {
@@ -1046,6 +1058,294 @@ function toggleSpeakStory() {
 // Some browsers load voices asynchronously; nudge the list to populate.
 if (speechSupported) {
   window.speechSynthesis.onvoiceschanged = () => {};
+}
+
+// ---------- write in Chinese ----------
+
+const COMPOSE_PREFS_KEY = "lang-learner-compose-prefs";
+const GRAMMAR_STATS_KEY = "lang-learner-grammar-stats-v1";
+
+// The task on screen, and whether its result was already recorded — checking
+// an edited answer again shouldn't count the same task twice in the stats.
+let composeTask = null;
+let composeRecorded = false;
+
+function loadComposePrefs() {
+  try {
+    return JSON.parse(localStorage.getItem(COMPOSE_PREFS_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveComposePrefs() {
+  localStorage.setItem(
+    COMPOSE_PREFS_KEY,
+    JSON.stringify({
+      kind: el("compose-kind").value,
+      hsk: el("compose-hsk").value,
+      lang: el("compose-lang").value,
+    })
+  );
+}
+
+// Per-language grammar pattern stats, kept separately from word stats but with
+// the same recent-weighted error rate, so a pattern you keep getting wrong is
+// picked for more tasks until you get it right a few times.
+function loadGrammarStats() {
+  try {
+    return JSON.parse(localStorage.getItem(GRAMMAR_STATS_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function recordPatternResult(pattern, ok) {
+  if (!pattern) return;
+  const stats = loadGrammarStats();
+  const langStats = (stats[state.currentLanguage.id] = stats[state.currentLanguage.id] || {});
+  const rec = langStats[pattern] || { seen: 0, wrong: 0 };
+  const miss = ok ? 0 : 1;
+  rec.errEma = rec.seen ? rec.errEma * 0.6 + miss * 0.4 : miss;
+  rec.seen += 1;
+  if (!ok) rec.wrong += 1;
+  rec.lastSeen = Date.now();
+  langStats[pattern] = rec;
+  localStorage.setItem(GRAMMAR_STATS_KEY, JSON.stringify(stats));
+}
+
+function weakPatterns() {
+  const langStats = loadGrammarStats()[state.currentLanguage.id] || {};
+  return Object.keys(langStats).filter((p) => langStats[p].errEma >= 0.3);
+}
+
+// 1-2 of the newest words plus one from the whole list (weighted toward weak
+// ones) — few enough that a short paragraph can use them all naturally.
+function pickComposeWords() {
+  const focus = shuffle(recentEntries()).slice(0, Math.random() < 0.5 ? 1 : 2);
+  const others = weightedShuffle(state.entries.filter((e) => !focus.includes(e)));
+  return [...focus, ...others.slice(0, focus.length ? 1 : 2)].map((e) => ({ char: e.char, pinyin: e.pinyin }));
+}
+
+function startCompose() {
+  const prefs = loadComposePrefs();
+  if (prefs.kind) el("compose-kind").value = prefs.kind;
+  if (prefs.hsk) el("compose-hsk").value = prefs.hsk;
+  if (prefs.lang) el("compose-lang").value = prefs.lang;
+  showScreen("compose");
+}
+
+async function newComposeTask() {
+  saveComposePrefs();
+  const kind = el("compose-kind").value;
+  const btn = el("compose-new-btn");
+  const words = pickComposeWords();
+  if (kind === "translate" && !words.length) {
+    el("compose-task-text").textContent = "Add some words first — translation tasks are built from your vocabulary.";
+    return;
+  }
+
+  btn.disabled = true;
+  el("compose-check-btn").disabled = true;
+  el("compose-task-text").textContent = kind === "translate" ? "Writing a passage for you to translate…" : "Picking a topic…";
+  el("compose-source").classList.add("hidden");
+  el("compose-targets").classList.add("hidden");
+  el("compose-feedback").classList.add("hidden");
+
+  try {
+    const res = await fetch("/api/compose-task", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        kind,
+        words,
+        hskLevel: Number(el("compose-hsk").value),
+        lang: el("compose-lang").value,
+        weakPatterns: weakPatterns(),
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "couldn't create a task");
+    composeTask = data;
+    composeRecorded = false;
+    renderComposeTask(data);
+  } catch (err) {
+    el("compose-task-text").textContent = `Couldn't create a task: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderComposeTask(task) {
+  el("compose-task-text").textContent = task.task;
+  const source = el("compose-source");
+  source.textContent = task.source || "";
+  source.classList.toggle("hidden", !task.source);
+
+  const words = task.words
+    .map((w) => `<span class="compose-word">${escapeHtml(w.char)} <small>${escapeHtml(w.pinyin)}</small></span>`)
+    .join("");
+  const targets = el("compose-targets");
+  targets.innerHTML =
+    (words ? `<div><span class="compose-label">Use</span>${words}</div>` : "") +
+    `<div><span class="compose-label">Grammar</span>${escapeHtml(task.pattern)}</div>`;
+  targets.classList.remove("hidden");
+
+  const input = el("compose-input");
+  input.value = "";
+  input.disabled = false;
+  input.focus();
+  el("compose-check-btn").disabled = false;
+}
+
+async function checkComposition() {
+  const text = el("compose-input").value.trim();
+  if (!composeTask || !text) return;
+  const btn = el("compose-check-btn");
+  const feedbackEl = el("compose-feedback");
+  btn.disabled = true;
+  feedbackEl.classList.remove("hidden");
+  feedbackEl.innerHTML = `<p class="subtle">Checking your writing…</p>`;
+
+  try {
+    const res = await fetch("/api/compose-feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        kind: composeTask.kind,
+        task: composeTask.task,
+        source: composeTask.source,
+        text,
+        words: composeTask.words,
+        pattern: composeTask.pattern,
+        hskLevel: Number(el("compose-hsk").value),
+        lang: el("compose-lang").value,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "grading failed");
+    renderComposeFeedback(data, text);
+    if (!composeRecorded) {
+      recordComposeResults(data);
+      composeRecorded = true;
+    }
+  } catch (err) {
+    feedbackEl.innerHTML = `<p class="compose-error">Couldn't check it: ${escapeHtml(err.message)}</p>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Target words used correctly count as a correct answer, misused ones as a
+// miss (so they surface as weak words in other modes). Words left out aren't
+// recorded, since skipping a word isn't evidence you don't know it. The
+// pattern counts as a miss if it was wrong or avoided.
+function recordComposeResults(feedback) {
+  const targets = new Set(composeTask.words.map((w) => w.char));
+  (feedback.words || []).forEach((w) => {
+    if (!targets.has(w.char) || w.status === "missing") return;
+    recordResult(state.currentLanguage.id, w.char, w.status === "correct");
+  });
+  if (feedback.pattern) recordPatternResult(composeTask.pattern, feedback.pattern.status === "correct");
+}
+
+// Character-level diff (LCS) between the learner's text and the corrected
+// version: [{ type: "same" | "del" | "ins", text }], adjacent runs merged.
+function diffChars(before, after) {
+  const a = [...before];
+  const b = [...after];
+  const n = a.length;
+  const m = b.length;
+  // lcs[i][j] = LCS length of a[i..] and b[j..]
+  const lcs = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+    }
+  }
+  const ops = [];
+  const push = (type, ch) => {
+    const last = ops[ops.length - 1];
+    if (last && last.type === type) last.text += ch;
+    else ops.push({ type, text: ch });
+  };
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      push("same", a[i]);
+      i++;
+      j++;
+    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+      push("del", a[i++]);
+    } else {
+      push("ins", b[j++]);
+    }
+  }
+  while (i < n) push("del", a[i++]);
+  while (j < m) push("ins", b[j++]);
+  return ops;
+}
+
+// One span per character so right-click pinyin lookup works on feedback text.
+function charSpansHTML(text) {
+  return [...text].map((ch) => `<span class="story-char">${escapeHtml(ch)}</span>`).join("");
+}
+
+function renderComposeFeedback(fb, original) {
+  const parts = [];
+  if (fb.summary) parts.push(`<p class="compose-summary">${escapeHtml(fb.summary)}</p>`);
+
+  if (fb.corrected.trim() === original) {
+    parts.push(`<h3>Your text</h3><div class="compose-text">${charSpansHTML(original)}</div>`);
+    parts.push(`<p class="compose-perfect">No corrections needed 🎉</p>`);
+  } else {
+    const diff = diffChars(original, fb.corrected.trim())
+      .map((op) => {
+        const html = charSpansHTML(op.text);
+        if (op.type === "del") return `<del class="diff-del">${html}</del>`;
+        if (op.type === "ins") return `<ins class="diff-ins">${html}</ins>`;
+        return html;
+      })
+      .join("");
+    parts.push(`<h3>Corrections</h3><div class="compose-text">${diff}</div>`);
+  }
+
+  if (fb.issues && fb.issues.length) {
+    const items = fb.issues
+      .map(
+        (iss) => `<li class="compose-issue">
+          <span class="issue-cat">${escapeHtml(iss.category)}</span>
+          <span class="diff-del">${escapeHtml(iss.original)}</span> → <span class="diff-ins">${escapeHtml(iss.correction)}</span>
+          <div class="issue-why">${escapeHtml(iss.explanation)}</div>
+        </li>`
+      )
+      .join("");
+    parts.push(`<h3>Mistakes</h3><ul class="compose-issues">${items}</ul>`);
+  }
+
+  const checks = [];
+  if (fb.pattern) {
+    const icon = { correct: "✅", incorrect: "❌", missing: "➖" }[fb.pattern.status] || "";
+    checks.push(
+      `<li>${icon} <b>${escapeHtml(composeTask.pattern)}</b>${fb.pattern.note ? ` — ${escapeHtml(fb.pattern.note)}` : ""}</li>`
+    );
+  }
+  (fb.words || []).forEach((w) => {
+    const icon = { correct: "✅", misused: "❌", missing: "➖" }[w.status] || "";
+    checks.push(`<li>${icon} <b>${escapeHtml(w.char)}</b>${w.note ? ` — ${escapeHtml(w.note)}` : ""}</li>`);
+  });
+  if (checks.length) parts.push(`<h3>Targets</h3><ul class="compose-checks">${checks.join("")}</ul>`);
+
+  if (fb.natural && fb.natural.trim() !== fb.corrected.trim()) {
+    parts.push(`<h3>How a native speaker might write it</h3><div class="compose-text">${charSpansHTML(fb.natural)}</div>`);
+  }
+  if (composeTask.reference) {
+    parts.push(`<h3>Model translation</h3><div class="compose-text">${charSpansHTML(composeTask.reference)}</div>`);
+  }
+  parts.push(`<p class="subtle story-hint-text">Edit your text above and check again, or start a new task. Right-click (or long-press) any character for its pinyin.</p>`);
+
+  el("compose-feedback").innerHTML = parts.join("");
 }
 
 // ---------- right-click pinyin lookup on story text ----------

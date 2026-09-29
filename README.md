@@ -70,7 +70,7 @@ The **✨ Generate** button next to the sentence field on the "Add new character
 
 The **Review Story** mode uses the same key to write a short story that reuses many of your words at once (see Quiz modes below).
 
-Without the key set, everything else still works — you'll just see an error if you click Generate, and can type sentences by hand instead. Both features are low-effort Claude Opus 5 requests (a single sentence is thinking-disabled and tiny; a review story leaves thinking on since it has to juggle ~15-20 words at once, but still stays at low effort) — each call costs a small fraction of a cent. The key never touches the browser; it's only read server-side.
+Without the key set, everything else still works — you'll just see an error if you click Generate, and can type sentences by hand instead. All AI features use Claude Haiku 4.5, the cheapest current model. Each call costs a small fraction of a cent; checking your writing in **Write in Chinese** costs a little more because the model gets a small thinking budget to find mistakes accurately. The key never touches the browser; it's only read server-side.
 
 ## Login (Basic Auth)
 
@@ -135,6 +135,7 @@ You can add words two ways:
 - **Sentence Practice** – shows one of your example sentences with the target word blanked out; you pick the character that fills the blank. Only includes words that have a sentence attached, so add some via the **+ Add new characters** screen to unlock it.
 - **Sentence Builder** – drag shuffled chunks of a generated sentence back into order. Each sentence is built around one of your newest words (cycled so each gets a turn), sometimes plus another word from your list, with a random topic and grammar pattern for its HSK level. Recent sentences are remembered so they aren't repeated.
 - **Review Story** – asks Claude to write a short story or conversation from a fresh random mix of your words: up to 5 of your newest words (which it must use) plus a random handful of others, weighted toward the weak ones. The scenario (setting, character, what happens, tone) is drawn at random for every story, so premises don't repeat. Afterwards it shows how many picked words made it in and any new words it skipped. Check **Study everything** to send your whole list instead. Requires `ANTHROPIC_API_KEY` (see above).
+- **Write in Chinese** – typed writing practice for grammar. Choose **Translate** (Claude writes 2–4 sentences in English or Vietnamese for you to write in Chinese) or **Free writing** (a random topic to write 3–5 sentences about). Every task gives you 2–3 of your words (mostly new ones) and one grammar pattern for the chosen HSK level. After you type your answer, Claude returns your text with corrections highlighted, each mistake with a short explanation of the rule (in English or Vietnamese), whether you used each target word and the pattern correctly, and a more natural native-speaker version. Words you misuse count as misses in your word stats. Grammar patterns you get wrong or leave out are tracked in browser localStorage and picked more often until you get them right. You can edit your text and check again; only the first check of a task counts toward your stats. Requires `ANTHROPIC_API_KEY`.
 
 ## Smart prioritization
 
