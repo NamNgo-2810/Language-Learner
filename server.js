@@ -13,6 +13,11 @@ const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
 // Haiku is the cheapest current model and handles these short, beginner-level
 // tasks well. It has no `effort` setting and doesn't think unless asked to.
 const MODEL = "claude-haiku-4-5";
+// Stories are longer creative writing, where a stronger model reads better.
+const STORY_MODEL = "claude-sonnet-5-5";
+// Annotating a newly added word (Hán Việt, chiết tự, grammar) happens once per
+// word and is cached in the sheet forever, so accuracy is worth the top model.
+const WORD_INFO_MODEL = "claude-opus-5-5";
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
@@ -219,22 +224,33 @@ function handleAddWord(req, res) {
     const target = resolveLanguageTarget(languageId);
     if (target.error) return sendJSON(res, target.status, { error: target.error });
 
-    // Generate the chiết tự breakdown and Hán Việt reading once, up front, so
-    // they're cached in the sheet from the start and never need to be
-    // requested from Claude again. Best-effort: a failure here (or no API key
-    // configured) shouldn't block adding the word — either can still be
-    // generated lazily on first flashcard view.
+    let entries;
+    try {
+      entries = await sheets.readEntries(target.sheetId, target.tab);
+    } catch (err) {
+      return sendJSON(res, 502, { error: err.message || "could not read sheet" });
+    }
+
+    // Generate the chiết tự breakdown, Hán Việt reading and grammar structures
+    // in one call, up front, so they're cached in the sheet from the start and
+    // never need to be requested from Claude again. Best-effort: a failure
+    // here (or no API key configured) shouldn't block adding the word — chiết
+    // tự and Hán Việt can still be generated lazily on first flashcard view,
+    // and grammar by the backfill button.
     let chietu = "";
     let hanViet = "";
+    let grammar = null;
     if (anthropic) {
-      const [c, h] = await Promise.allSettled([generateChietu(char), generateHanViet(char)]);
-      if (c.status === "fulfilled") chietu = c.value.chietu;
-      if (h.status === "fulfilled") hanViet = h.value.hanViet;
+      try {
+        ({ chietu, hanViet, grammar } = await generateWordInfo(char, pinyin, knownPatterns(entries)));
+      } catch {
+        // leave the fields empty; see above
+      }
     }
 
     try {
       const today = todayLabel();
-      const last = await sheets.lastSessionLabel(target.sheetId, target.tab);
+      const last = lastSessionLabelOf(entries);
       const newSession = last !== today;
       await sheets.appendEntry(target.sheetId, target.tab, {
         char,
@@ -243,6 +259,7 @@ function handleAddWord(req, res) {
         session: today,
         chietu,
         hanViet,
+        grammar,
       });
       sendJSON(res, 200, {
         ok: true,
@@ -252,6 +269,7 @@ function handleAddWord(req, res) {
         sessionLabel: today,
         chietu: chietu || null,
         hanViet: hanViet || null,
+        grammar,
         pinyinVariants: pinyinVariants(char, pinyin),
       });
     } catch (err) {
@@ -712,6 +730,183 @@ async function generateChietu(char) {
   return { chietu: parsed.chietu };
 }
 
+// The session label (date) of the most recently added row, or null.
+function lastSessionLabelOf(entries) {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (entries[i].sessionLabel) return entries[i].sessionLabel;
+  }
+  return null;
+}
+
+// Every grammar structure name already saved for this language, so Claude can
+// reuse the exact same name when another word shares a structure (practice
+// stats are keyed by name).
+function knownPatterns(entries) {
+  const names = new Set();
+  entries.forEach((e) => (e.grammar || []).forEach((g) => names.add(g.pattern)));
+  return [...names];
+}
+
+const GRAMMAR_ITEM_SCHEMA = {
+  type: "object",
+  properties: {
+    pattern: { type: "string" },
+    meaning: { type: "string" },
+    example: { type: "string" },
+  },
+  required: ["pattern", "meaning", "example"],
+  additionalProperties: false,
+};
+
+// Shared instructions for picking a word's grammar structures, used both when
+// a word is added and when old words are backfilled.
+function grammarInstructions(known) {
+  return (
+    "Grammar structures: list the common, general grammar structures that are built around the word itself — the kind a textbook teaches as a grammar point. " +
+    "Typical examples: 的 (adjective/noun + 的 + noun), 的时候 (……的时候, when …), 给 (给 + person + verb), 有点儿 (有点儿 + adjective), 了, 过, 把, 被, 比, 跟……一起, 一边……一边, 越来越, 因为……所以, 就, 才, 得 (verb + 得 + adjective). " +
+    "Most words have none: ordinary nouns, verbs and adjectives (苹果, 学校, 吃, 漂亮…) get an empty list, and so do words whose only 'grammar' is too specific or rare to be worth drilling. When in doubt, leave it out. At most 3 structures per word. " +
+    "For each structure: `pattern` is a short canonical name with placeholders, e.g. \"有点儿 + adjective\", \"……的时候\", \"给 + person + verb\" (write placeholders in English); " +
+    "`meaning` is one short English sentence on what it expresses and how it's used; `example` is one short, simple Chinese sentence using it. " +
+    (known.length
+      ? `If a structure is the same as one of these already-saved names, reuse that name exactly: ${known.join(" | ")}. `
+      : "")
+  );
+}
+
+// One call for everything cached about a newly added word: its Hán Việt
+// reading, chiết tự breakdown and grammar structures.
+async function generateWordInfo(char, pinyin, known) {
+  // Opus always thinks, and thinking counts toward max_tokens, so leave room
+  // well beyond the small JSON answer. If Opus declines, the API retries the
+  // same request on a fallback model instead of failing the word.
+  const message = await anthropic.beta.messages.create({
+    model: WORD_INFO_MODEL,
+    max_tokens: 16000,
+    betas: ["server-side-fallback-2026-07-01"],
+    fallbacks: "default",
+    output_config: {
+      effort: "medium",
+      format: {
+        type: "json_schema",
+        schema: {
+          type: "object",
+          properties: {
+            hanViet: { type: "string" },
+            chietu: { type: "string" },
+            grammar: { type: "array", items: GRAMMAR_ITEM_SCHEMA },
+          },
+          required: ["hanViet", "chietu", "grammar"],
+          additionalProperties: false,
+        },
+      },
+    },
+    system:
+      "You annotate a Chinese character or word for a Vietnamese-speaking learner of Mandarin. Return three fields.\n" +
+      "`hanViet`: the Hán Việt (Sino-Vietnamese) reading — the traditional Vietnamese pronunciation of the Han character, NOT a translation of its meaning. For a multi-character word, give each character's reading in order, separated by spaces.\n" +
+      "`chietu`: a chiết tự (component / radical) breakdown. For each character, list its components with their individual meaning, then briefly explain how they combine to suggest the character's meaning. For a multi-character word, do each character in order, separated by ' | '. Keep it concise — a phrase or short sentence per character.\n" +
+      "`grammar`: " + grammarInstructions(known) + "\n" +
+      "No extra commentary.",
+    messages: [{ role: "user", content: `${char} (${pinyin})` }],
+  });
+
+  if (message.stop_reason === "refusal") throw new Error("the model declined to annotate this word");
+  if (message.stop_reason === "max_tokens") throw new Error("the annotation was cut off");
+  const textBlock = message.content.find((b) => b.type === "text");
+  if (!textBlock) throw new Error("no annotation returned");
+  const parsed = JSON.parse(textBlock.text);
+  return {
+    hanViet: parsed.hanViet || "",
+    chietu: parsed.chietu || "",
+    grammar: Array.isArray(parsed.grammar) ? parsed.grammar.slice(0, 3) : null,
+  };
+}
+
+// One call for every not-yet-checked word: returns a Map char -> grammar
+// array. Only words that have structures come back, so the reply stays small;
+// the rest are recorded as checked with none.
+async function generateGrammarBatch(words, known) {
+  const message = await anthropic.messages.create({
+    model: MODEL,
+    max_tokens: 16000,
+    output_config: {
+      format: {
+        type: "json_schema",
+        schema: {
+          type: "object",
+          properties: {
+            words: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  char: { type: "string" },
+                  grammar: { type: "array", items: GRAMMAR_ITEM_SCHEMA },
+                },
+                required: ["char", "grammar"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["words"],
+          additionalProperties: false,
+        },
+      },
+    },
+    system:
+      "You go through a Mandarin learner's vocabulary list and find the words that come with a grammar structure worth practicing. " +
+      grammarInstructions(known) +
+      "Return only the words that have at least one structure (use the word exactly as given in `char`); leave every other word out. " +
+      "If two words in the list share a structure, give it the same `pattern` name both times. No extra commentary.",
+    messages: [{ role: "user", content: words.map((w) => `${w.char} (${w.pinyin})`).join("\n") }],
+  });
+
+  if (message.stop_reason === "refusal") throw new Error("the model declined to scan this word list");
+  if (message.stop_reason === "max_tokens") throw new Error("the word list was too long to scan in one go");
+  const textBlock = message.content.find((b) => b.type === "text");
+  if (!textBlock) throw new Error("no grammar returned");
+  const parsed = JSON.parse(textBlock.text);
+  const result = new Map();
+  (parsed.words || []).forEach((w) => {
+    if (w.char && Array.isArray(w.grammar) && w.grammar.length) result.set(w.char, w.grammar.slice(0, 3));
+  });
+  return result;
+}
+
+// POST /api/grammar-backfill { languageId } — finds every word whose grammar
+// column is still empty, asks Claude about all of them in one call, and saves
+// the results in one batch write. Returns the updated { char, grammar } list.
+function handleGrammarBackfill(req, res) {
+  if (!anthropic) {
+    return sendJSON(res, 500, {
+      error: "ANTHROPIC_API_KEY is not set on the server — export it before running npm start",
+    });
+  }
+  withJSONBody(req, res, 1e4, async (data) => {
+    const target = resolveLanguageTarget(String(data.languageId || ""));
+    if (target.error) return sendJSON(res, target.status, { error: target.error });
+
+    try {
+      const entries = await sheets.readEntries(target.sheetId, target.tab);
+      const pending = entries.filter((e) => e.grammar === null);
+      if (!pending.length) return sendJSON(res, 200, { ok: true, scanned: 0, found: 0, words: [] });
+
+      // Duplicate rows of the same word are scanned once and all updated.
+      const unique = [...new Map(pending.map((e) => [e.char, e])).values()];
+      const found = await generateGrammarBatch(unique, knownPatterns(entries));
+      const updates = pending.map((e) => ({ rowNumber: e.rowNumber, char: e.char, grammar: found.get(e.char) || [] }));
+      await sheets.updateGrammarBatch(target.sheetId, target.tab, updates);
+      sendJSON(res, 200, {
+        ok: true,
+        scanned: unique.length,
+        found: found.size,
+        words: updates.map(({ char, grammar }) => ({ char, grammar })),
+      });
+    } catch (err) {
+      sendJSON(res, 502, { error: err.message || "scan failed" });
+    }
+  });
+}
+
 // Serves a per-word value that's cached in the word's sheet row (chiết tự in
 // column H, Hán Việt in column I): returns the cached value if there is one,
 // otherwise asks Claude once and writes the result back to that row, so every
@@ -818,8 +1013,8 @@ async function generateReviewStory(words, hskLevel, length, format) {
   if (others.length) lines.push(`Review words (use as many as fit naturally): ${listOf(others)}`);
 
   const message = await anthropic.messages.create({
-    model: MODEL,
-    max_tokens: 2000,
+    model: STORY_MODEL,
+    max_tokens: 4000,
     output_config: {
       format: {
         type: "json_schema",
@@ -845,6 +1040,9 @@ async function generateReviewStory(words, hskLevel, length, format) {
 
   if (message.stop_reason === "refusal") {
     throw new Error("the model declined to generate text for this word list");
+  }
+  if (message.stop_reason === "max_tokens") {
+    throw new Error("the story ran too long and was cut off — try a shorter length");
   }
 
   const textBlock = message.content.find((b) => b.type === "text");
@@ -924,9 +1122,9 @@ function pickComposePattern(hskLevel, weakPatterns) {
 // Writes a short passage in the learner's own language for them to translate
 // into Chinese, shaped so a natural translation needs the given words and
 // grammar pattern. Also returns a model translation to compare against later.
-async function generateTranslationSource(words, hskLevel, pattern, lang) {
+async function generateTranslationSource(words, hskLevel, pattern, lang, short = false) {
   const scenario = randomScenario();
-  const sentenceCount = 2 + Math.floor(Math.random() * 3); // 2-4
+  const sentenceCount = short ? 1 + Math.floor(Math.random() * 2) : 2 + Math.floor(Math.random() * 3); // 1-2 or 2-4
   const lines = [
     `Setting: ${scenario.setting}. Character: ${scenario.character}. What happens: ${scenario.situation}. Tone: ${scenario.tone}.`,
     `Target level: HSK ${hskLevel} (1-6 scale).`,
@@ -1006,15 +1204,18 @@ function withJSONBody(req, res, limit, fn) {
   });
 }
 
-// POST /api/compose-task { kind, words, hskLevel, lang, weakPatterns } —
+// POST /api/compose-task { kind, words, hskLevel, lang, weakPatterns, pattern? } —
 // returns a writing task: { kind, task, pattern, words, source?, reference? }.
+// A given `pattern` (grammar practice) is used as-is instead of being picked
+// from SENTENCE_PATTERNS, and gets a shorter 1-2 sentence passage.
 function handleComposeTask(req, res) {
   withJSONBody(req, res, 2e4, async (data) => {
     const kind = data.kind === "free" ? "free" : "translate";
     const words = cleanWordList(data.words, 4);
     const hskLevel = Math.min(6, Math.max(1, Math.round(Number(data.hskLevel) || 3)));
     const weakPatterns = (Array.isArray(data.weakPatterns) ? data.weakPatterns : []).map(String);
-    const pattern = pickComposePattern(hskLevel, weakPatterns);
+    const fixedPattern = String(data.pattern || "").trim().slice(0, 200);
+    const pattern = fixedPattern || pickComposePattern(hskLevel, weakPatterns);
 
     if (kind === "free") {
       return sendJSON(res, 200, { ok: true, kind, task: buildFreeWritingTask(), pattern, words });
@@ -1026,7 +1227,13 @@ function handleComposeTask(req, res) {
     }
     if (!words.length) return sendJSON(res, 400, { error: "words (array of {char, pinyin}) is required" });
     try {
-      const { source, reference } = await generateTranslationSource(words, hskLevel, pattern, feedbackLanguage(data.lang));
+      const { source, reference } = await generateTranslationSource(
+        words,
+        hskLevel,
+        pattern,
+        feedbackLanguage(data.lang),
+        Boolean(fixedPattern)
+      );
       sendJSON(res, 200, {
         ok: true,
         kind,
@@ -1239,6 +1446,9 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === "POST" && pathname === "/api/generate-review-story") {
     return handleGenerateReviewStory(req, res);
+  }
+  if (req.method === "POST" && pathname === "/api/grammar-backfill") {
+    return handleGrammarBackfill(req, res);
   }
   if (req.method === "POST" && pathname === "/api/compose-task") {
     return handleComposeTask(req, res);

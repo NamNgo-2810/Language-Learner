@@ -445,6 +445,7 @@ function bindStaticEvents() {
   });
   ["compose-kind", "compose-hsk", "compose-lang"].forEach((id) => el(id).addEventListener("change", saveComposePrefs));
   el("back-from-compose-btn").addEventListener("click", () => showScreen("mode"));
+  el("grammar-scan-btn").addEventListener("click", scanOldWordsForGrammar);
 
   bindPinyinLookup(el("story-text"), ".story-char");
   bindPinyinLookup(el("compose-feedback"), ".story-char");
@@ -459,6 +460,8 @@ function launchMode(mode) {
     startReviewStory();
   } else if (mode === "compose") {
     startCompose();
+  } else if (mode === "grammar") {
+    startGrammar();
   } else if (mode === "confusables") {
     const pool = confusableGroups(state.entries).flat();
     if (!pool.length) {
@@ -551,10 +554,57 @@ function buildStudyQueue(entries, cap) {
   return shuffle(picked);
 }
 
+// Fewest older words mixed into a flashcard run, even when the latest date
+// alone already fills the session.
+const FLASHCARD_MIN_EXTRAS = 5;
+
+// The date (session label) words were most recently added on. Labels are
+// YYYY-MM-DD, so they compare as strings; non-date labels fall back to the
+// newest session in sheet order.
+function latestSessionEntries(entries) {
+  const dated = entries.filter((e) => /^\d{4}-\d{2}-\d{2}$/.test(e.sessionLabel || ""));
+  if (dated.length) {
+    const latest = dated.reduce((max, e) => (e.sessionLabel > max ? e.sessionLabel : max), "");
+    return entries.filter((e) => e.sessionLabel === latest);
+  }
+  const maxIdx = maxSessionIndex(entries);
+  return maxIdx >= 0 ? entries.filter((e) => e.sessionIndex === maxIdx) : [];
+}
+
+// Flashcards always include every word from the latest date, then top up to
+// the session cap with flagged/weak words first and older words after.
+function buildFlashcardQueue(entries, cap) {
+  const latest = latestSessionEntries(entries);
+  const latestSet = new Set(latest);
+  const flagged = [];
+  const weak = [];
+  const rest = [];
+  entries.forEach((e) => {
+    if (latestSet.has(e)) return;
+    const rec = statFor(e.char);
+    if (rec && rec.flagged) flagged.push(e);
+    else if (isWeak(rec)) weak.push(e);
+    else rest.push(e);
+  });
+
+  const nExtras = Math.max(cap - latest.length, FLASHCARD_MIN_EXTRAS);
+  // Half the extras go to flagged/weak words, the rest to older ones; either
+  // side's unused share spills over to the other.
+  const struggling = [...weightedShuffle(flagged), ...weightedShuffle(weak)];
+  const older = weightedShuffle(rest, reviewWeight);
+  const nStruggling = Math.min(struggling.length, Math.max(Math.ceil(nExtras / 2), nExtras - older.length));
+  const extras = [...struggling.slice(0, nStruggling), ...older.slice(0, nExtras - nStruggling)];
+  return shuffle([...latest, ...extras]);
+}
+
 function beginQuiz(mode, entries, { skipCap = false } = {}) {
   if (!entries.length) return;
   const studyAll = skipCap || el("study-all-toggle").checked;
-  const queue = studyAll ? weightedShuffle(entries) : buildStudyQueue(entries, SESSION_CAP);
+  const queue = studyAll
+    ? weightedShuffle(entries)
+    : mode === "flashcard"
+      ? buildFlashcardQueue(entries, SESSION_CAP)
+      : buildStudyQueue(entries, SESSION_CAP);
 
   state.mode = mode;
   state.queue = queue;
@@ -1034,25 +1084,48 @@ function toggleSpeakStory() {
   }
   if (!currentStoryText) return;
 
-  const utter = new SpeechSynthesisUtterance(currentStoryText);
-  utter.lang = "zh-CN";
+  // Chrome silently stops a single long utterance after ~15 seconds, cutting
+  // the story off mid-sentence, so queue one utterance per sentence instead.
   const voice = pickChineseVoice();
-  if (voice) utter.voice = voice;
-  utter.rate = 0.9;
+  const chunks = splitForSpeech(currentStoryText);
+  chunks.forEach(({ text, offset }, i) => {
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = "zh-CN";
+    if (voice) utter.voice = voice;
+    utter.rate = 0.9;
 
-  // Highlight the character currently being spoken (where the browser reports
-  // boundary events — support varies, so this is a best-effort nicety).
-  utter.onboundary = (e) => {
-    if (typeof e.charIndex !== "number") return;
-    clearSpeakingHighlight();
-    const span = el("story-text").querySelector(`.story-char[data-index="${e.charIndex}"]`);
-    if (span) span.classList.add("speaking");
-  };
-  utter.onend = stopSpeaking;
-  utter.onerror = stopSpeaking;
+    // Highlight the character currently being spoken (where the browser reports
+    // boundary events — support varies, so this is a best-effort nicety).
+    // Indexes are per-utterance, so shift them back into the full story.
+    utter.onboundary = (e) => {
+      if (typeof e.charIndex !== "number") return;
+      clearSpeakingHighlight();
+      const idx = [...text.slice(0, e.charIndex)].length + offset;
+      const span = el("story-text").querySelector(`.story-char[data-index="${idx}"]`);
+      if (span) span.classList.add("speaking");
+    };
+    if (i === chunks.length - 1) utter.onend = stopSpeaking;
+    utter.onerror = (e) => {
+      // cancel() fires "interrupted"/"canceled" on every queued utterance
+      if (e.error !== "interrupted" && e.error !== "canceled") stopSpeaking();
+    };
+    window.speechSynthesis.speak(utter);
+  });
 
   el("speak-story-btn").textContent = "⏹ Stop";
-  window.speechSynthesis.speak(utter);
+}
+
+// Splits text into sentence-sized pieces (keeping the end punctuation), each
+// with its offset in code points so highlights line up with the story spans.
+function splitForSpeech(text) {
+  const pieces = text.match(/[^。！？!?；;\n]+[。！？!?；;\n]*|[。！？!?；;\n]+/g) || [text];
+  const chunks = [];
+  let offset = 0;
+  for (const piece of pieces) {
+    if (piece.trim()) chunks.push({ text: piece, offset });
+    offset += [...piece].length;
+  }
+  return chunks.length ? chunks : [{ text, offset: 0 }];
 }
 
 // Some browsers load voices asynchronously; nudge the list to populate.
@@ -1127,19 +1200,136 @@ function pickComposeWords() {
   return [...focus, ...others.slice(0, focus.length ? 1 : 2)].map((e) => ({ char: e.char, pinyin: e.pinyin }));
 }
 
+// Grammar Practice reuses the writing screen: same grader and pattern stats,
+// but each task targets one structure saved with the learner's own words.
+let composeGrammarMode = false;
+let lastGrammarPattern = null;
+
+function setComposeMode(grammar) {
+  composeGrammarMode = grammar;
+  composeTask = null;
+  el("compose-title").textContent = grammar ? "Grammar Practice" : "Write in Chinese";
+  el("compose-intro").textContent = grammar
+    ? "Each task practices one grammar structure that came with your words, in a short passage to translate. Structures you get wrong come back more often."
+    : "Each task uses a few of your words and one grammar pattern. Patterns you get wrong come back more often.";
+  el("compose-kind-control").classList.toggle("hidden", grammar);
+  el("grammar-scan").classList.toggle("hidden", !grammar);
+  el("compose-task-text").textContent = grammar
+    ? "Pick a difficulty, then press New task."
+    : "Pick a task type and difficulty, then press New task.";
+  el("compose-source").classList.add("hidden");
+  el("compose-targets").classList.add("hidden");
+  el("compose-feedback").classList.add("hidden");
+  el("compose-input").value = "";
+  el("compose-input").disabled = true;
+  el("compose-check-btn").disabled = true;
+}
+
 function startCompose() {
   const prefs = loadComposePrefs();
   if (prefs.kind) el("compose-kind").value = prefs.kind;
   if (prefs.hsk) el("compose-hsk").value = prefs.hsk;
   if (prefs.lang) el("compose-lang").value = prefs.lang;
+  setComposeMode(false);
   showScreen("compose");
+}
+
+function startGrammar() {
+  startCompose();
+  setComposeMode(true);
+  updateGrammarScanStatus();
+}
+
+// Every saved structure, merged across the words that share it:
+// [{ pattern, meaning, example, entries: [entry, ...] }].
+function grammarItems() {
+  const byPattern = new Map();
+  state.entries.forEach((e) => {
+    (e.grammar || []).forEach((g) => {
+      if (!byPattern.has(g.pattern)) byPattern.set(g.pattern, { ...g, entries: [] });
+      byPattern.get(g.pattern).entries.push(e);
+    });
+  });
+  return [...byPattern.values()];
+}
+
+// Favors structures you keep getting wrong, ones you haven't practiced yet,
+// and ones that came with your newest words; never the same one twice in a row.
+function pickGrammarItem() {
+  let items = grammarItems();
+  if (items.length > 1) items = items.filter((it) => it.pattern !== lastGrammarPattern);
+  if (!items.length) return null;
+  const langStats = loadGrammarStats()[state.currentLanguage.id] || {};
+  const latest = new Set(latestSessionEntries(state.entries));
+  const weigh = (it) => {
+    const rec = langStats[it.pattern];
+    let w = 1;
+    if (!rec) w += 3;
+    else w += rec.errEma * 6;
+    if (it.entries.some((e) => latest.has(e))) w += 4;
+    else if (it.entries.some((e) => isRecentEntry(e))) w += 2;
+    return w;
+  };
+  const item = weightedShuffle(items, weigh)[0];
+  lastGrammarPattern = item.pattern;
+  return item;
+}
+
+function updateGrammarScanStatus() {
+  const unchecked = state.entries.filter((e) => e.grammar == null).length;
+  const structures = grammarItems().length;
+  el("grammar-scan-status").textContent =
+    `${structures} structure${structures === 1 ? "" : "s"} from your words` +
+    (unchecked ? ` · ${unchecked} word${unchecked === 1 ? "" : "s"} not scanned yet` : " · all words scanned");
+  el("grammar-scan-btn").disabled = !unchecked;
+}
+
+// Sends every not-yet-scanned word to Claude in one request; the server saves
+// the results to the sheet and returns them so the session updates in place.
+async function scanOldWordsForGrammar() {
+  const btn = el("grammar-scan-btn");
+  const status = el("grammar-scan-status");
+  btn.disabled = true;
+  status.textContent = "Scanning your words for grammar structures… (this can take a minute)";
+  try {
+    const res = await fetch("/api/grammar-backfill", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ languageId: state.currentLanguage.id }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "scan failed");
+    const byChar = new Map(data.words.map((w) => [w.char, w.grammar]));
+    state.entries.forEach((e) => {
+      if (e.grammar == null && byChar.has(e.char)) e.grammar = byChar.get(e.char);
+    });
+    updateGrammarScanStatus();
+    status.textContent = `Scanned ${data.scanned} word${data.scanned === 1 ? "" : "s"}, ${data.found} with grammar structures · ` + status.textContent;
+  } catch (err) {
+    status.textContent = `Couldn't scan: ${err.message}`;
+    btn.disabled = false;
+  }
 }
 
 async function newComposeTask() {
   saveComposePrefs();
-  const kind = el("compose-kind").value;
+  const kind = composeGrammarMode ? "translate" : el("compose-kind").value;
   const btn = el("compose-new-btn");
-  const words = pickComposeWords();
+  let words;
+  let grammarItem = null;
+  if (composeGrammarMode) {
+    grammarItem = pickGrammarItem();
+    if (!grammarItem) {
+      el("compose-task-text").textContent =
+        "No grammar structures saved yet — press “Scan old words for grammar”, or add new words (they're scanned automatically).";
+      return;
+    }
+    // The word the structure came from — the newest one if several share it.
+    const source = grammarItem.entries.reduce((a, b) => (b.sessionIndex > a.sessionIndex ? b : a));
+    words = [{ char: source.char, pinyin: source.pinyin }];
+  } else {
+    words = pickComposeWords();
+  }
   if (kind === "translate" && !words.length) {
     el("compose-task-text").textContent = "Add some words first — translation tasks are built from your vocabulary.";
     return;
@@ -1162,11 +1352,12 @@ async function newComposeTask() {
         hskLevel: Number(el("compose-hsk").value),
         lang: el("compose-lang").value,
         weakPatterns: weakPatterns(),
+        pattern: grammarItem ? grammarItem.pattern : undefined,
       }),
     });
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || "couldn't create a task");
-    composeTask = data;
+    composeTask = { ...data, grammar: grammarItem };
     composeRecorded = false;
     renderComposeTask(data);
   } catch (err) {
@@ -1186,9 +1377,14 @@ function renderComposeTask(task) {
     .map((w) => `<span class="compose-word">${escapeHtml(w.char)} <small>${escapeHtml(w.pinyin)}</small></span>`)
     .join("");
   const targets = el("compose-targets");
+  const g = task.grammar;
   targets.innerHTML =
     (words ? `<div><span class="compose-label">Use</span>${words}</div>` : "") +
-    `<div><span class="compose-label">Grammar</span>${escapeHtml(task.pattern)}</div>`;
+    `<div><span class="compose-label">Grammar</span>${escapeHtml(task.pattern)}</div>` +
+    (g && g.meaning ? `<div><span class="compose-label">Means</span>${escapeHtml(g.meaning)}</div>` : "") +
+    (g && g.example
+      ? `<div><span class="compose-label">e.g.</span><span class="grammar-example">${escapeHtml(g.example)}</span></div>`
+      : "");
   targets.classList.remove("hidden");
 
   const input = el("compose-input");
@@ -1566,6 +1762,7 @@ async function submitNewCharacter() {
       sessionLabel: data.sessionLabel || null,
       chietu: data.chietu || null,
       hanViet: data.hanViet || null,
+      grammar: data.grammar || null,
       pinyinVariants: data.pinyinVariants || [],
     });
     feedback.textContent = `Added ${char} ${pinyin}`;
@@ -1573,7 +1770,12 @@ async function submitNewCharacter() {
 
     const row = document.createElement("div");
     row.className = "added-row";
-    row.innerHTML = `<span>${char}</span><span class="added-pinyin">${pinyin}${sentence ? " · " + sentence : ""}</span>`;
+    const grammarNote = (data.grammar || []).length
+      ? ` · grammar: ${data.grammar.map((g) => g.pattern).join(", ")}`
+      : "";
+    row.innerHTML = `<span>${escapeHtml(char)}</span><span class="added-pinyin">${escapeHtml(
+      pinyin + (sentence ? " · " + sentence : "") + grammarNote
+    )}</span>`;
     el("add-recent").prepend(row);
 
     charInput.value = "";

@@ -547,6 +547,15 @@ h2 { font-size: 1.15rem; margin: 0 0 4px; }
   font-weight: 600;
 }
 .compose-word small { color: var(--subtle); font-weight: 400; }
+.grammar-scan {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+}
+.grammar-example { color: var(--subtle); }
 .compose-input {
   width: 100%;
   margin-top: 16px;

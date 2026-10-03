@@ -70,6 +70,11 @@
         <span class="mode-name">Write in Chinese</span>
         <span class="mode-desc">Translate or write a short paragraph, get your grammar corrected</span>
       </button>
+      <button class="mode-card" data-mode="grammar" id="mode-grammar">
+        <span class="mode-icon">🧩</span>
+        <span class="mode-name">Grammar Practice</span>
+        <span class="mode-desc">Practice the grammar structures that come with your words (的, 时候, 给, 有点儿…)</span>
+      </button>
     </div>
     <label class="toggle-row">
       <input type="checkbox" id="study-all-toggle">
@@ -217,11 +222,16 @@
 
   <!-- Screen 3c: write in Chinese -->
   <section id="screen-compose" class="screen hidden">
-    <h2>Write in Chinese</h2>
-    <p class="subtle">Each task uses a few of your words and one grammar pattern. Patterns you get wrong come back more often.</p>
+    <h2 id="compose-title">Write in Chinese</h2>
+    <p class="subtle" id="compose-intro">Each task uses a few of your words and one grammar pattern. Patterns you get wrong come back more often.</p>
+
+    <div id="grammar-scan" class="grammar-scan hidden">
+      <span id="grammar-scan-status" class="subtle"></span>
+      <button class="secondary-btn" id="grammar-scan-btn">🔍 Scan old words for grammar</button>
+    </div>
 
     <div class="story-controls">
-      <label class="story-control">
+      <label class="story-control" id="compose-kind-control">
         <span>Task</span>
         <select id="compose-kind">
           <option value="translate" selected>Translate</option>

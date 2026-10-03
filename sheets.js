@@ -87,10 +87,12 @@ function quoteTab(tab) {
 // Column H is shared by both layouts and holds the cached chiết tự (character
 // component breakdown) explanation, generated once and reused instead of
 // asking Claude on every flashcard view. Column I caches the Hán Việt
-// reading the same way.
+// reading the same way, and column J the grammar structures that come with the
+// word, as a JSON array of { pattern, meaning, example } ("[]" = checked, none
+// worth listing; empty = not checked yet).
 // normalizeRow figures out which layout a given row is and returns a common
-// { char, pinyin, sentence, session, chietu, hanViet } shape, or null if the row has
-// no word.
+// { char, pinyin, sentence, session, chietu, hanViet, grammar } shape, or null if
+// the row has no word.
 //
 // A1-notation date-like timestamps (e.g. a full "2026-09-08 14:03:22") are
 // trimmed to just the YYYY-MM-DD part so both layouts group into sessions the
@@ -104,10 +106,24 @@ function sessionFromCell(value) {
   return match ? match[0] : raw;
 }
 
+// Column J -> array of grammar structures, or null if the word hasn't been
+// checked yet (or the cell isn't valid JSON, so it gets re-checked).
+function grammarFromCell(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  try {
+    const list = JSON.parse(raw);
+    return Array.isArray(list) ? list.filter((g) => g && g.pattern) : null;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeRow(row) {
   const col = (i) => String((row && row[i]) || "").trim();
   const chietu = col(7) || null; // column H, shared by both layouts
   const hanViet = col(8) || null; // column I, shared by both layouts
+  const grammar = grammarFromCell(col(9)); // column J, shared by both layouts
 
   // Native layout: char in column A.
   if (col(0)) {
@@ -121,6 +137,7 @@ function normalizeRow(row) {
       session: sessionFromCell(col(3)),
       chietu,
       hanViet,
+      grammar,
     };
   }
 
@@ -136,6 +153,7 @@ function normalizeRow(row) {
       session: sessionFromCell(col(6)),
       chietu,
       hanViet,
+      grammar,
     };
   }
 
@@ -144,16 +162,16 @@ function normalizeRow(row) {
 
 // Reads every word row for a language's tab and returns entries in the same
 // shape the client already expects from the old markdown parser:
-//   { char, pinyin, sentence, sessionIndex, sessionLabel, chietu, hanViet, rowNumber }
+//   { char, pinyin, sentence, sessionIndex, sessionLabel, chietu, hanViet, grammar, rowNumber }
 // Handles both the native (A-D) and form (D/E/G) row layouts on the same tab.
 // sessionIndex is assigned in the order sessions (dates) first appear.
 // rowNumber is the 1-based sheet row, used to write the cached columns back to
 // the right row later without a second lookup.
 async function readEntries(spreadsheetId, tab) {
   const sheets = await getSheetsClient();
-  // Read A:I so both layouts (char in A, or char in D + timestamp in G) are
-  // covered, plus the shared cache columns (H chietu, I Hán Việt).
-  const range = `${quoteTab(tab)}!A:I`;
+  // Read A:J so both layouts (char in A, or char in D + timestamp in G) are
+  // covered, plus the shared cache columns (H chietu, I Hán Việt, J grammar).
+  const range = `${quoteTab(tab)}!A:J`;
   const res = await sheets.spreadsheets.values.get({ spreadsheetId, range });
   const rows = res.data.values || [];
 
@@ -179,6 +197,7 @@ async function readEntries(spreadsheetId, tab) {
       sessionLabel,
       chietu: norm.chietu,
       hanViet: norm.hanViet,
+      grammar: norm.grammar,
       rowNumber: i + 1,
     });
   }
@@ -200,16 +219,20 @@ async function lastSessionLabel(spreadsheetId, tab) {
 // Appends one word row. `session` is the YYYY-MM-DD label the row belongs to.
 // `chietu` (optional) is the chiết tự breakdown generated at add-time, cached
 // in column H so it's never re-requested from Claude later; `hanViet` likewise
-// in column I.
-async function appendEntry(spreadsheetId, tab, { char, pinyin, sentence, session, chietu, hanViet }) {
+// in column I, and `grammar` (an array, or null if it couldn't be generated) in
+// column J.
+async function appendEntry(spreadsheetId, tab, { char, pinyin, sentence, session, chietu, hanViet, grammar }) {
   const sheets = await getSheetsClient();
   await sheets.spreadsheets.values.append({
     spreadsheetId,
-    range: `${quoteTab(tab)}!A:I`,
+    range: `${quoteTab(tab)}!A:J`,
     valueInputOption: "RAW",
     insertDataOption: "INSERT_ROWS",
     requestBody: {
-      values: [[char, pinyin, sentence || "", session || "", "", "", "", chietu || "", hanViet || ""]],
+      values: [[
+        char, pinyin, sentence || "", session || "", "", "", "",
+        chietu || "", hanViet || "", grammar ? JSON.stringify(grammar) : "",
+      ]],
     },
   });
 }
@@ -234,6 +257,23 @@ async function updateHanViet(spreadsheetId, tab, rowNumber, hanViet) {
     range: `${quoteTab(tab)}!I${rowNumber}`,
     valueInputOption: "RAW",
     requestBody: { values: [[hanViet]] },
+  });
+}
+
+// Writes the grammar structures for many rows in one request.
+// `updates` is an array of { rowNumber, grammar } with grammar an array.
+async function updateGrammarBatch(spreadsheetId, tab, updates) {
+  if (!updates.length) return;
+  const sheets = await getSheetsClient();
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      valueInputOption: "RAW",
+      data: updates.map((u) => ({
+        range: `${quoteTab(tab)}!J${u.rowNumber}`,
+        values: [[JSON.stringify(u.grammar)]],
+      })),
+    },
   });
 }
 
@@ -267,5 +307,6 @@ module.exports = {
   appendEntries,
   updateChietu,
   updateHanViet,
+  updateGrammarBatch,
   countDataRows,
 };
