@@ -260,6 +260,18 @@ async function updateHanViet(spreadsheetId, tab, rowNumber, hanViet) {
   });
 }
 
+// Overwrites all three cached columns (H chiết tự, I Hán Việt, J grammar) of
+// one row, e.g. after the learner asks for them to be regenerated.
+async function updateWordInfo(spreadsheetId, tab, rowNumber, { chietu, hanViet, grammar }) {
+  const sheets = await getSheetsClient();
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `${quoteTab(tab)}!H${rowNumber}:J${rowNumber}`,
+    valueInputOption: "RAW",
+    requestBody: { values: [[chietu || "", hanViet || "", grammar ? JSON.stringify(grammar) : ""]] },
+  });
+}
+
 // Writes the grammar structures for many rows in one request.
 // `updates` is an array of { rowNumber, grammar } with grammar an array.
 async function updateGrammarBatch(spreadsheetId, tab, updates) {
@@ -308,5 +320,6 @@ module.exports = {
   updateChietu,
   updateHanViet,
   updateGrammarBatch,
+  updateWordInfo,
   countDataRows,
 };

@@ -340,6 +340,7 @@ function bindStaticEvents() {
   el("flag-word-btn").addEventListener("click", toggleCurrentFlag);
 
   el("flip-btn").addEventListener("click", flipFlashcard);
+  el("regen-word-btn").addEventListener("click", regenerateCurrentWord);
   document.querySelectorAll(".fc-rate-btn").forEach((btn) => {
     btn.addEventListener("click", () => answerFlashcard(btn.dataset.know === "1"));
   });
@@ -443,7 +444,7 @@ function bindStaticEvents() {
   el("compose-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) checkComposition();
   });
-  ["compose-kind", "compose-hsk", "compose-lang"].forEach((id) => el(id).addEventListener("change", saveComposePrefs));
+  ["compose-kind", "compose-hsk"].forEach((id) => el(id).addEventListener("change", saveComposePrefs));
   el("back-from-compose-btn").addEventListener("click", () => showScreen("mode"));
   el("grammar-scan-btn").addEventListener("click", scanOldWordsForGrammar);
 
@@ -674,6 +675,9 @@ function renderQuestion() {
     el("flashcard-chietu").textContent = "";
     el("flashcard-sentence").classList.add("hidden");
     el("flashcard-sentence").innerHTML = "";
+    el("flashcard-grammar").classList.add("hidden");
+    el("flashcard-grammar").innerHTML = "";
+    el("regen-word-btn").classList.add("hidden");
     el("flip-btn").classList.remove("hidden");
     el("flashcard-rate").classList.add("hidden");
     if (isHanVietEnabled()) ensureHanViet(entry);
@@ -787,6 +791,11 @@ function flipFlashcard() {
   }
   el("flip-btn").classList.add("hidden");
   el("flashcard-rate").classList.remove("hidden");
+  renderFlashcardGrammar(entry);
+  const regen = el("regen-word-btn");
+  regen.disabled = false;
+  regen.textContent = "🔄 Regenerate Hán Việt, chiết tự & grammar";
+  regen.classList.remove("hidden");
   if (isHanVietEnabled()) {
     ensureHanViet(entry).then(() => {
       if (currentEntry() !== entry || !entry.hanViet || !isHanVietEnabled()) return;
@@ -853,6 +862,66 @@ function ensureChietu(entry) {
       entry._chietuPromise = null;
     });
   return entry._chietuPromise;
+}
+
+function renderFlashcardGrammar(entry) {
+  const box = el("flashcard-grammar");
+  const list = entry.grammar || [];
+  box.innerHTML = list.length
+    ? "Ngữ pháp:<ul>" +
+      list
+        .map(
+          (g) =>
+            `<li><b>${escapeHtml(g.pattern)}</b> — ${escapeHtml(g.meaning || "")}` +
+            (g.example ? ` <span class="grammar-example">(${escapeHtml(g.example)})</span>` : "") +
+            "</li>"
+        )
+        .join("") +
+      "</ul>"
+    : "";
+  box.classList.toggle("hidden", !list.length);
+}
+
+// Re-asks Opus for the flipped card's Hán Việt, chiết tự and grammar; the
+// server overwrites the sheet, and the card updates in place.
+async function regenerateCurrentWord() {
+  const entry = currentEntry();
+  if (!entry) return;
+  const btn = el("regen-word-btn");
+  btn.disabled = true;
+  btn.textContent = "Regenerating…";
+  try {
+    const res = await fetch("/api/regenerate-word", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ languageId: state.currentLanguage.id, char: entry.char }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "regeneration failed");
+    // Every copy of the word in this session shares the new values.
+    state.entries
+      .filter((e) => e.char === entry.char)
+      .concat(entry)
+      .forEach((e) => {
+        e.hanViet = data.hanViet || null;
+        e.chietu = data.chietu || null;
+        e.grammar = data.grammar || null;
+      });
+    if (currentEntry() !== entry) return;
+    if (isHanVietEnabled() && entry.hanViet) {
+      el("flashcard-hanviet").textContent = `Hán Việt: ${entry.hanViet}`;
+      el("flashcard-hanviet").classList.remove("hidden");
+    }
+    if (isChietuEnabled() && entry.chietu) {
+      el("flashcard-chietu").textContent = `Chiết tự: ${entry.chietu}`;
+      el("flashcard-chietu").classList.remove("hidden");
+    }
+    renderFlashcardGrammar(entry);
+    btn.textContent = "✅ Regenerated and saved";
+  } catch (err) {
+    btn.textContent = `Couldn't regenerate: ${err.message} — try again`;
+    btn.disabled = false;
+  }
 }
 
 // How many cards later a missed flashcard comes back within the same run.
@@ -1157,7 +1226,6 @@ function saveComposePrefs() {
     JSON.stringify({
       kind: el("compose-kind").value,
       hsk: el("compose-hsk").value,
-      lang: el("compose-lang").value,
     })
   );
 }
@@ -1229,7 +1297,6 @@ function startCompose() {
   const prefs = loadComposePrefs();
   if (prefs.kind) el("compose-kind").value = prefs.kind;
   if (prefs.hsk) el("compose-hsk").value = prefs.hsk;
-  if (prefs.lang) el("compose-lang").value = prefs.lang;
   setComposeMode(false);
   showScreen("compose");
 }
@@ -1350,7 +1417,7 @@ async function newComposeTask() {
         kind,
         words,
         hskLevel: Number(el("compose-hsk").value),
-        lang: el("compose-lang").value,
+        lang: "vi",
         weakPatterns: weakPatterns(),
         pattern: grammarItem ? grammarItem.pattern : undefined,
       }),
@@ -1415,7 +1482,7 @@ async function checkComposition() {
         words: composeTask.words,
         pattern: composeTask.pattern,
         hskLevel: Number(el("compose-hsk").value),
-        lang: el("compose-lang").value,
+        lang: "vi",
       }),
     });
     const data = await res.json();

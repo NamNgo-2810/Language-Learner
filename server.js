@@ -715,7 +715,7 @@ async function generateChietu(char) {
       "You give a chiết tự (character component / radical) breakdown of a Chinese character or word, for a Vietnamese-speaking learner of Chinese. " +
       "For each character, list its components (radicals/parts) with their individual meaning, then briefly explain how those components combine to suggest the character's overall meaning. " +
       "For a multi-character word, do this for each character in order, separated by ' | '. " +
-      "Keep it concise — a phrase or short sentence per character, not a lecture. Reply with just the breakdown, no extra commentary.",
+      "Keep it concise — a phrase or short sentence per character, not a lecture. Write the explanation in Vietnamese. Reply with just the breakdown, no extra commentary.",
     messages: [{ role: "user", content: char }],
   });
 
@@ -763,10 +763,10 @@ const GRAMMAR_ITEM_SCHEMA = {
 function grammarInstructions(known) {
   return (
     "Grammar structures: list the common, general grammar structures that are built around the word itself — the kind a textbook teaches as a grammar point. " +
-    "Typical examples: 的 (adjective/noun + 的 + noun), 的时候 (……的时候, when …), 给 (给 + person + verb), 有点儿 (有点儿 + adjective), 了, 过, 把, 被, 比, 跟……一起, 一边……一边, 越来越, 因为……所以, 就, 才, 得 (verb + 得 + adjective). " +
+    "Typical examples: 的 (tính từ/danh từ + 的 + danh từ), 的时候 (……的时候, khi …), 给 (给 + người + động từ), 有点儿 (有点儿 + tính từ), 了, 过, 把, 被, 比, 跟……一起, 一边……一边, 越来越, 因为……所以, 就, 才, 得 (động từ + 得 + tính từ). " +
     "Most words have none: ordinary nouns, verbs and adjectives (苹果, 学校, 吃, 漂亮…) get an empty list, and so do words whose only 'grammar' is too specific or rare to be worth drilling. When in doubt, leave it out. At most 3 structures per word. " +
-    "For each structure: `pattern` is a short canonical name with placeholders, e.g. \"有点儿 + adjective\", \"……的时候\", \"给 + person + verb\" (write placeholders in English); " +
-    "`meaning` is one short English sentence on what it expresses and how it's used; `example` is one short, simple Chinese sentence using it. " +
+    "For each structure: `pattern` is a short canonical name with placeholders, e.g. \"有点儿 + tính từ\", \"……的时候\", \"给 + người + động từ\" (write placeholders in Vietnamese); " +
+    "`meaning` is one short Vietnamese sentence on what it expresses and how it's used; `example` is one short, simple Chinese sentence using it. " +
     (known.length
       ? `If a structure is the same as one of these already-saved names, reuse that name exactly: ${known.join(" | ")}. `
       : "")
@@ -803,7 +803,7 @@ async function generateWordInfo(char, pinyin, known) {
     system:
       "You annotate a Chinese character or word for a Vietnamese-speaking learner of Mandarin. Return three fields.\n" +
       "`hanViet`: the Hán Việt (Sino-Vietnamese) reading — the traditional Vietnamese pronunciation of the Han character, NOT a translation of its meaning. For a multi-character word, give each character's reading in order, separated by spaces.\n" +
-      "`chietu`: a chiết tự (component / radical) breakdown. For each character, list its components with their individual meaning, then briefly explain how they combine to suggest the character's meaning. For a multi-character word, do each character in order, separated by ' | '. Keep it concise — a phrase or short sentence per character.\n" +
+      "`chietu`: a chiết tự (component / radical) breakdown. For each character, list its components with their individual meaning, then briefly explain how they combine to suggest the character's meaning. For a multi-character word, do each character in order, separated by ' | '. Keep it concise — a phrase or short sentence per character. Write it in Vietnamese.\n" +
       "`grammar`: " + grammarInstructions(known) + "\n" +
       "No extra commentary.",
     messages: [{ role: "user", content: `${char} (${pinyin})` }],
@@ -823,42 +823,48 @@ async function generateWordInfo(char, pinyin, known) {
 
 // One call for every not-yet-checked word: returns a Map char -> grammar
 // array. Only words that have structures come back, so the reply stays small;
-// the rest are recorded as checked with none.
+// the rest are recorded as checked with none. Runs on Opus like the per-word
+// annotation, streamed because thinking over a long list can take a while.
 async function generateGrammarBatch(words, known) {
-  const message = await anthropic.messages.create({
-    model: MODEL,
-    max_tokens: 16000,
-    output_config: {
-      format: {
-        type: "json_schema",
-        schema: {
-          type: "object",
-          properties: {
-            words: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  char: { type: "string" },
-                  grammar: { type: "array", items: GRAMMAR_ITEM_SCHEMA },
+  const message = await anthropic.beta.messages
+    .stream({
+      model: WORD_INFO_MODEL,
+      max_tokens: 64000,
+      betas: ["server-side-fallback-2026-07-01"],
+      fallbacks: "default",
+      output_config: {
+        effort: "medium",
+        format: {
+          type: "json_schema",
+          schema: {
+            type: "object",
+            properties: {
+              words: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    char: { type: "string" },
+                    grammar: { type: "array", items: GRAMMAR_ITEM_SCHEMA },
+                  },
+                  required: ["char", "grammar"],
+                  additionalProperties: false,
                 },
-                required: ["char", "grammar"],
-                additionalProperties: false,
               },
             },
+            required: ["words"],
+            additionalProperties: false,
           },
-          required: ["words"],
-          additionalProperties: false,
         },
       },
-    },
-    system:
-      "You go through a Mandarin learner's vocabulary list and find the words that come with a grammar structure worth practicing. " +
-      grammarInstructions(known) +
-      "Return only the words that have at least one structure (use the word exactly as given in `char`); leave every other word out. " +
-      "If two words in the list share a structure, give it the same `pattern` name both times. No extra commentary.",
-    messages: [{ role: "user", content: words.map((w) => `${w.char} (${w.pinyin})`).join("\n") }],
-  });
+      system:
+        "You go through a Mandarin learner's vocabulary list and find the words that come with a grammar structure worth practicing. " +
+        grammarInstructions(known) +
+        "Return only the words that have at least one structure (use the word exactly as given in `char`); leave every other word out. " +
+        "If two words in the list share a structure, give it the same `pattern` name both times. No extra commentary.",
+      messages: [{ role: "user", content: words.map((w) => `${w.char} (${w.pinyin})`).join("\n") }],
+    })
+    .finalMessage();
 
   if (message.stop_reason === "refusal") throw new Error("the model declined to scan this word list");
   if (message.stop_reason === "max_tokens") throw new Error("the word list was too long to scan in one go");
@@ -903,6 +909,36 @@ function handleGrammarBackfill(req, res) {
       });
     } catch (err) {
       sendJSON(res, 502, { error: err.message || "scan failed" });
+    }
+  });
+}
+
+// POST /api/regenerate-word { languageId, char } — re-asks Opus for the word's
+// Hán Việt, chiết tự and grammar, overwriting the cached columns on every row
+// of that word. Returns the new { hanViet, chietu, grammar }.
+function handleRegenerateWord(req, res) {
+  if (!anthropic) {
+    return sendJSON(res, 500, {
+      error: "ANTHROPIC_API_KEY is not set on the server — export it before running npm start",
+    });
+  }
+  withJSONBody(req, res, 1e4, async (data) => {
+    const char = String(data.char || "").trim();
+    if (!char) return sendJSON(res, 400, { error: "char is required" });
+    const target = resolveLanguageTarget(String(data.languageId || ""));
+    if (target.error) return sendJSON(res, target.status, { error: target.error });
+
+    try {
+      const entries = await sheets.readEntries(target.sheetId, target.tab);
+      const rows = entries.filter((e) => e.char === char);
+      if (!rows.length) return sendJSON(res, 404, { error: `${char} isn't in the sheet` });
+      // Leave this word's own old names out so they don't anchor the new answer.
+      const others = entries.filter((e) => e.char !== char);
+      const info = await generateWordInfo(char, rows[0].pinyin, knownPatterns(others));
+      for (const row of rows) await sheets.updateWordInfo(target.sheetId, target.tab, row.rowNumber, info);
+      sendJSON(res, 200, { ok: true, ...info });
+    } catch (err) {
+      sendJSON(res, 502, { error: err.message || "regeneration failed" });
     }
   });
 }
@@ -1102,8 +1138,9 @@ function handleGenerateReviewStory(req, res) {
 
 const FEEDBACK_LANGUAGES = { en: "English", vi: "Vietnamese" };
 
+// Explanations default to Vietnamese; English only if a client asks for it.
 function feedbackLanguage(code) {
-  return FEEDBACK_LANGUAGES[code] || FEEDBACK_LANGUAGES.en;
+  return FEEDBACK_LANGUAGES[code] || FEEDBACK_LANGUAGES.vi;
 }
 
 // Picks the grammar pattern a writing task should practice: usually one the
@@ -1446,6 +1483,9 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === "POST" && pathname === "/api/generate-review-story") {
     return handleGenerateReviewStory(req, res);
+  }
+  if (req.method === "POST" && pathname === "/api/regenerate-word") {
+    return handleRegenerateWord(req, res);
   }
   if (req.method === "POST" && pathname === "/api/grammar-backfill") {
     return handleGrammarBackfill(req, res);

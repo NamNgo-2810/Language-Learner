@@ -121,6 +121,9 @@
         <div class="hanviet-hint hidden" id="flashcard-hanviet"></div>
         <div class="chietu-hint hidden" id="flashcard-chietu"></div>
         <div class="sentence-hint hidden" id="flashcard-sentence"></div>
+        <div class="chietu-hint hidden" id="flashcard-grammar"></div>
+        <button id="regen-word-btn" class="link-btn hidden" type="button"
+          title="Ask Claude Opus again for this word's Hán Việt, chiết tự and grammar, and save them to the sheet">🔄 Regenerate Hán Việt, chiết tự &amp; grammar</button>
         <button id="flip-btn" class="primary-btn">Show answer</button>
         <label class="toggle-row hanviet-toggle-row">
           <input type="checkbox" id="hanviet-toggle" checked>
@@ -247,13 +250,6 @@
           <option value="4">4</option>
           <option value="5">5</option>
           <option value="6">6 · hardest</option>
-        </select>
-      </label>
-      <label class="story-control">
-        <span>Explanations in</span>
-        <select id="compose-lang">
-          <option value="en" selected>English</option>
-          <option value="vi">Tiếng Việt</option>
         </select>
       </label>
       <button class="primary-btn" id="compose-new-btn">✨ New task</button>
