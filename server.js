@@ -17,7 +17,7 @@ const MODEL = "claude-haiku-4-5";
 const STORY_MODEL = "claude-sonnet-5-5";
 // Annotating a newly added word (Hán Việt, chiết tự, grammar) happens once per
 // word and is cached in the sheet forever, so accuracy is worth the top model.
-const WORD_INFO_MODEL = "claude-opus-5-5";
+const WORD_INFO_MODEL = "claude-opus-5";
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
@@ -776,7 +776,7 @@ function grammarInstructions(known) {
 // One call for everything cached about a newly added word: its Hán Việt
 // reading, chiết tự breakdown and grammar structures.
 async function generateWordInfo(char, pinyin, known) {
-  // Opus always thinks, and thinking counts toward max_tokens, so leave room
+  // Opus thinks by default, and thinking counts toward max_tokens, so leave room
   // well beyond the small JSON answer. If Opus declines, the API retries the
   // same request on a fallback model instead of failing the word.
   const message = await anthropic.beta.messages.create({
