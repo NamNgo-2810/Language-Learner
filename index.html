@@ -84,6 +84,34 @@
     <button class="link-btn" id="back-to-language">&larr; back</button>
   </section>
 
+  <!-- Day/session picker modal (shown before a quiz mode starts) -->
+  <div id="day-picker-overlay" class="modal-overlay hidden">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="day-picker-title">
+      <h2 id="day-picker-title">Pick which days to study</h2>
+      <p class="subtle" id="day-picker-sub">Choose one or more days. Leave all unchecked to study everything.</p>
+
+      <div class="day-picker-actions">
+        <button type="button" class="link-btn inline" id="day-select-all">Select all</button>
+        <button type="button" class="link-btn inline" id="day-select-none">Clear</button>
+        <button type="button" class="link-btn inline" id="day-select-latest">Latest only</button>
+      </div>
+
+      <div id="day-list" class="day-list"></div>
+
+      <label class="day-mix-row">
+        <span>Mix in extra words from other days</span>
+        <input type="number" id="day-mix-count" min="0" max="100" value="0">
+      </label>
+
+      <div id="day-picker-feedback" class="day-picker-feedback"></div>
+
+      <div class="button-row">
+        <button class="primary-btn" id="day-start-btn">Start</button>
+        <button class="secondary-btn" id="day-cancel-btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Screen 2b: add new characters -->
   <section id="screen-add" class="screen hidden">
     <h2>Add characters to <span id="add-lang-name"></span></h2>

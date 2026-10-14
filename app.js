@@ -35,6 +35,8 @@ const state = {
   index: 0,
   missed: [],        // entries missed during this run
   correctCount: 0,
+  // The pool a quiz draws from after the day picker. Null = whole list.
+  activeEntries: null,
 };
 
 const el = (id) => document.getElementById(id);
@@ -276,6 +278,61 @@ function confusablesFor(entry, entries) {
   return entries.filter((e) => e.char !== entry.char && normalizePinyin(e.pinyin) === key);
 }
 
+// ---------- day / session grouping ----------
+
+// Groups the current language's entries by their session label (the day they
+// were added). Returns [{ label, index, entries }] sorted newest-first — dated
+// labels (YYYY-MM-DD) descending, with any undated/blank group last.
+function sessionGroups() {
+  const byLabel = new Map();
+  state.entries.forEach((e) => {
+    const label = e.sessionLabel || "(undated)";
+    if (!byLabel.has(label)) byLabel.set(label, { label, index: e.sessionIndex, entries: [] });
+    byLabel.get(label).entries.push(e);
+  });
+  const groups = [...byLabel.values()];
+  groups.sort((a, b) => {
+    const aDate = /^\d{4}-\d{2}-\d{2}$/.test(a.label);
+    const bDate = /^\d{4}-\d{2}-\d{2}$/.test(b.label);
+    if (aDate && bDate) return a.label < b.label ? 1 : -1; // newest date first
+    if (aDate !== bDate) return aDate ? -1 : 1; // dated groups before undated
+    return b.index - a.index; // fall back to session order
+  });
+  return groups;
+}
+
+// The label of the newest dated session (or null), used to tag it in the picker.
+function latestSessionLabel() {
+  const groups = sessionGroups();
+  return groups.length ? groups[0].label : null;
+}
+
+// The entry pool a quiz should draw from: the day-picker selection if one is
+// active, otherwise the whole list. Everything downstream (launchMode, the
+// queue builders, confusables, etc.) goes through this.
+function activePool() {
+  return state.activeEntries && state.activeEntries.length ? state.activeEntries : state.entries;
+}
+
+// Builds the study pool from the chosen day labels plus `mixCount` extra words
+// drawn (weighted toward weak/flagged) from the days NOT chosen. If no labels
+// are chosen, the whole list is used.
+function buildDayPool(selectedLabels, mixCount) {
+  if (!selectedLabels.length) return state.entries.slice();
+
+  const chosen = new Set(selectedLabels);
+  const inSet = [];
+  const outSet = [];
+  state.entries.forEach((e) => {
+    const label = e.sessionLabel || "(undated)";
+    (chosen.has(label) ? inSet : outSet).push(e);
+  });
+
+  const extras = mixCount > 0 ? weightedShuffle(outSet).slice(0, mixCount) : [];
+  // Keep the picked days intact, then append the mixed-in extras.
+  return [...inSet, ...extras];
+}
+
 // ---------- init ----------
 
 async function init() {
@@ -307,6 +364,7 @@ function renderLanguageList() {
 
 async function selectLanguage(lang) {
   state.currentLanguage = lang;
+  state.activeEntries = null; // reset any day filter from a previous language
   try {
     const res = await fetch(`/api/words?languageId=${encodeURIComponent(lang.id)}`);
     const data = await res.json();
@@ -334,7 +392,16 @@ function bindStaticEvents() {
   el("quit-quiz").addEventListener("click", () => showScreen("mode"));
 
   document.querySelectorAll(".mode-card").forEach((btn) => {
-    btn.addEventListener("click", () => launchMode(btn.dataset.mode));
+    btn.addEventListener("click", () => openDayPicker(btn.dataset.mode));
+  });
+
+  el("day-start-btn").addEventListener("click", confirmDayPicker);
+  el("day-cancel-btn").addEventListener("click", closeDayPicker);
+  el("day-select-all").addEventListener("click", () => setAllDayChecks(true));
+  el("day-select-none").addEventListener("click", () => setAllDayChecks(false));
+  el("day-select-latest").addEventListener("click", selectLatestDayOnly);
+  el("day-picker-overlay").addEventListener("click", (e) => {
+    if (e.target === el("day-picker-overlay")) closeDayPicker();
   });
 
   el("flag-word-btn").addEventListener("click", toggleCurrentFlag);
@@ -454,6 +521,84 @@ function bindStaticEvents() {
   bindGlobalPinyinPopupDismiss();
 }
 
+// ---------- day picker (shown before every mode) ----------
+
+// The mode waiting to launch once the learner confirms their day selection.
+let pendingMode = null;
+
+function openDayPicker(mode) {
+  if (!state.entries.length) {
+    alert("No words yet — add some characters first.");
+    return;
+  }
+  pendingMode = mode;
+  renderDayList();
+  el("day-mix-count").value = "0";
+  el("day-picker-feedback").textContent = "";
+  el("day-picker-overlay").classList.remove("hidden");
+}
+
+function closeDayPicker() {
+  el("day-picker-overlay").classList.add("hidden");
+  pendingMode = null;
+}
+
+// Renders one checkbox row per session, newest first, defaulting to the newest
+// day checked.
+function renderDayList() {
+  const list = el("day-list");
+  list.innerHTML = "";
+  const groups = sessionGroups();
+  const latest = latestSessionLabel();
+
+  groups.forEach((g, i) => {
+    const row = document.createElement("label");
+    row.className = "day-row" + (g.label === latest ? " is-latest" : "");
+    const count = g.entries.length;
+    row.innerHTML =
+      `<input type="checkbox" class="day-check" value="${escapeAttr(g.label)}" ${i === 0 ? "checked" : ""}>` +
+      `<span class="day-label">${escapeHtml(g.label)}</span>` +
+      `<span class="day-count">${count} word${count === 1 ? "" : "s"}</span>`;
+    list.appendChild(row);
+  });
+}
+
+function escapeAttr(str) {
+  return String(str).replace(/"/g, "&quot;").replace(/&/g, "&amp;");
+}
+
+function dayChecks() {
+  return [...document.querySelectorAll(".day-check")];
+}
+
+function setAllDayChecks(checked) {
+  dayChecks().forEach((c) => (c.checked = checked));
+}
+
+function selectLatestDayOnly() {
+  const latest = latestSessionLabel();
+  dayChecks().forEach((c) => (c.checked = c.value === latest));
+}
+
+function confirmDayPicker() {
+  const selected = dayChecks().filter((c) => c.checked).map((c) => c.value);
+  const mixCount = Math.max(0, Math.min(100, Math.round(Number(el("day-mix-count").value) || 0)));
+
+  const pool = buildDayPool(selected, mixCount);
+  if (!pool.length) {
+    el("day-picker-feedback").textContent = "That selection has no words — pick at least one day.";
+    return;
+  }
+
+  // Empty selection means "everything" — represent that as no filter so the
+  // normal recency/weighting behaves exactly as before.
+  state.activeEntries = selected.length ? pool : null;
+
+  const mode = pendingMode;
+  closeDayPicker();
+  launchMode(mode);
+}
+
 // ---------- mode launch (filters the pool per mode, then starts the quiz) ----------
 
 function launchMode(mode) {
@@ -464,9 +609,9 @@ function launchMode(mode) {
   } else if (mode === "grammar") {
     startGrammar();
   } else if (mode === "confusables") {
-    const pool = confusableGroups(state.entries).flat();
+    const pool = confusableGroups(activePool()).flat();
     if (!pool.length) {
-      alert("No confusable pairs found yet — add more characters that share a pinyin to unlock this mode.");
+      alert("No confusable pairs found in the selected days — pick more days, or add characters that share a pinyin.");
       return;
     }
     beginQuiz(mode, pool);
@@ -474,9 +619,10 @@ function launchMode(mode) {
     // Each question is a freshly generated sentence built around 1-2 of the
     // learner's words: one cycled through the newest words (so each new word
     // gets its turn instead of the same one repeating), sometimes plus one
-    // drawn from the whole list.
-    const recentCycle = shuffle(recentEntries());
-    const anyCycle = weightedShuffle(state.entries);
+    // drawn from the active pool.
+    const pool = activePool();
+    const recentCycle = shuffle(dayAwareRecentEntries(pool));
+    const anyCycle = weightedShuffle(pool);
     const placeholders = Array.from({ length: SENTENCE_SESSION_LENGTH }, (_, i) => {
       const words = [];
       if (recentCycle.length) words.push(recentCycle[i % recentCycle.length]);
@@ -486,8 +632,16 @@ function launchMode(mode) {
     });
     beginQuiz(mode, placeholders, { skipCap: true });
   } else {
-    beginQuiz(mode, state.entries);
+    beginQuiz(mode, activePool());
   }
+}
+
+// Recent entries within a specific pool — if the pool is a day selection, every
+// word in it counts as "recent" (there's no newer day to compare against);
+// otherwise fall back to the global recent-session notion.
+function dayAwareRecentEntries(pool) {
+  if (state.activeEntries && state.activeEntries.length) return pool.slice();
+  return recentEntries();
 }
 
 // ---------- quiz setup ----------
@@ -522,7 +676,7 @@ const WEAK_SHARE = 0.4;
 // otherwise still outvote 15 new words at weight ~5.
 function buildStudyQueue(entries, cap) {
   if (entries.length <= cap) return weightedShuffle(entries);
-  const maxIdx = maxSessionIndex(state.entries);
+  const maxIdx = maxSessionIndex(entries);
   const recent = [];
   const weak = [];
   const rest = [];
@@ -999,14 +1153,15 @@ let currentStoryText = "";
 const STORY_FOCUS_MAX = 5;
 
 function pickStoryWords(length) {
+  const pool = activePool();
   const toWord = (e, focus) => ({ char: e.char, pinyin: e.pinyin, focus });
-  const recent = recentEntries();
+  const recent = dayAwareRecentEntries(pool).filter((e) => pool.includes(e));
   if (el("study-all-toggle").checked) {
-    return state.entries.map((e) => toWord(e, recent.includes(e)));
+    return pool.map((e) => toWord(e, recent.includes(e)));
   }
-  const target = Math.min(state.entries.length, Math.max(6, Math.min(16, length * 2 + 2)));
+  const target = Math.min(pool.length, Math.max(6, Math.min(16, length * 2 + 2)));
   const focus = shuffle(recent).slice(0, Math.min(STORY_FOCUS_MAX, Math.ceil(target / 2)));
-  const others = weightedShuffle(state.entries.filter((e) => !focus.includes(e))).slice(0, target - focus.length);
+  const others = weightedShuffle(pool.filter((e) => !focus.includes(e))).slice(0, target - focus.length);
   return [...focus.map((e) => toWord(e, true)), ...others.map((e) => toWord(e, false))];
 }
 
@@ -1015,11 +1170,12 @@ function startReviewStory() {
   currentStoryText = "";
   el("speak-story-btn").disabled = true;
   el("story-text").textContent = "Choose a difficulty and length, then generate a story.";
-  const n = state.entries.length;
+  const n = activePool().length;
+  const scoped = state.activeEntries && state.activeEntries.length ? " from the days you picked" : "";
   el("story-word-count").textContent = n
     ? el("study-all-toggle").checked
-      ? `Each story tries to use all ${n} words in your list`
-      : `Each story picks a fresh mix: your newest words, plus a random handful of the other ${n} words`
+      ? `Each story tries to use all ${n} words${scoped}`
+      : `Each story picks a fresh mix of your ${n} words${scoped}`
     : "";
   showScreen("story");
 }
@@ -1263,8 +1419,9 @@ function weakPatterns() {
 // 1-2 of the newest words plus one from the whole list (weighted toward weak
 // ones) — few enough that a short paragraph can use them all naturally.
 function pickComposeWords() {
-  const focus = shuffle(recentEntries()).slice(0, Math.random() < 0.5 ? 1 : 2);
-  const others = weightedShuffle(state.entries.filter((e) => !focus.includes(e)));
+  const pool = activePool();
+  const focus = shuffle(dayAwareRecentEntries(pool).filter((e) => pool.includes(e))).slice(0, Math.random() < 0.5 ? 1 : 2);
+  const others = weightedShuffle(pool.filter((e) => !focus.includes(e)));
   return [...focus, ...others.slice(0, focus.length ? 1 : 2)].map((e) => ({ char: e.char, pinyin: e.pinyin }));
 }
 
