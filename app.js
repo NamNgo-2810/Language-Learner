@@ -37,6 +37,8 @@ const state = {
   correctCount: 0,
   // The pool a quiz draws from after the day picker. Null = whole list.
   activeEntries: null,
+  // True for a random run (unweighted shuffle, no date selection).
+  randomOrder: false,
 };
 
 const el = (id) => document.getElementById(id);
@@ -365,6 +367,7 @@ function renderLanguageList() {
 async function selectLanguage(lang) {
   state.currentLanguage = lang;
   state.activeEntries = null; // reset any day filter from a previous language
+  state.randomOrder = false;
   try {
     const res = await fetch(`/api/words?languageId=${encodeURIComponent(lang.id)}`);
     const data = await res.json();
@@ -396,6 +399,7 @@ function bindStaticEvents() {
   });
 
   el("day-start-btn").addEventListener("click", confirmDayPicker);
+  el("day-random-btn").addEventListener("click", startRandomDays);
   el("day-cancel-btn").addEventListener("click", closeDayPicker);
   el("day-select-all").addEventListener("click", () => setAllDayChecks(true));
   el("day-select-none").addEventListener("click", () => setAllDayChecks(false));
@@ -532,6 +536,7 @@ function openDayPicker(mode) {
     return;
   }
   pendingMode = mode;
+  state.randomOrder = false;
   renderDayList();
   el("day-mix-count").value = "0";
   el("day-picker-feedback").textContent = "";
@@ -594,6 +599,16 @@ function confirmDayPicker() {
   // normal recency/weighting behaves exactly as before.
   state.activeEntries = selected.length ? pool : null;
 
+  const mode = pendingMode;
+  closeDayPicker();
+  launchMode(mode);
+}
+
+// Random: skip picking dates entirely — draw from the whole list, shuffled with
+// no recency bias, so you get an even mix across all days.
+function startRandomDays() {
+  state.activeEntries = shuffle(state.entries);
+  state.randomOrder = true;
   const mode = pendingMode;
   closeDayPicker();
   launchMode(mode);
@@ -755,11 +770,15 @@ function buildFlashcardQueue(entries, cap) {
 function beginQuiz(mode, entries, { skipCap = false } = {}) {
   if (!entries.length) return;
   const studyAll = skipCap || el("study-all-toggle").checked;
-  const queue = studyAll
-    ? weightedShuffle(entries)
-    : mode === "flashcard"
-      ? buildFlashcardQueue(entries, SESSION_CAP)
-      : buildStudyQueue(entries, SESSION_CAP);
+  // Random mode: an even, unweighted shuffle across all days (capped), with no
+  // recency/weakness bias — the point is a surprise mix, not smart review.
+  const queue = state.randomOrder
+    ? shuffle(entries).slice(0, skipCap ? entries.length : SESSION_CAP)
+    : studyAll
+      ? weightedShuffle(entries)
+      : mode === "flashcard"
+        ? buildFlashcardQueue(entries, SESSION_CAP)
+        : buildStudyQueue(entries, SESSION_CAP);
 
   state.mode = mode;
   state.queue = queue;
