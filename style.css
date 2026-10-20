@@ -709,3 +709,75 @@ h2 { font-size: 1.15rem; margin: 0 0 4px; }
   min-height: 1.1em;
   margin-bottom: 8px;
 }
+
+/* ---------- story pinyin practice + diff ---------- */
+
+.pinyin-practice {
+  margin-top: 20px;
+  text-align: left;
+}
+.pinyin-practice-line {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.ppl-chinese {
+  font-size: 1.3rem;
+  line-height: 1.6;
+  margin-bottom: 8px;
+}
+.ppl-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 1.05rem;
+}
+.ppl-input.line-correct { border-color: var(--good); }
+.ppl-input.line-wrong { border-color: var(--bad); }
+.ppl-diff {
+  margin-top: 8px;
+  font-size: 1.05rem;
+  line-height: 1.7;
+  display: none;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ppl-diff.show { display: flex; }
+.diff-syl {
+  padding: 1px 7px;
+  border-radius: 6px;
+}
+.diff-syl.ok { background: rgba(62, 207, 142, 0.18); color: var(--good); }
+.diff-syl.bad {
+  background: rgba(255, 107, 107, 0.16);
+  color: var(--bad);
+}
+.diff-syl.bad .diff-yours {
+  text-decoration: line-through;
+  opacity: 0.8;
+  margin-right: 6px;
+}
+.diff-syl.bad .diff-expected { font-weight: 600; }
+.diff-syl.missing { background: rgba(255, 107, 107, 0.16); color: var(--bad); font-weight: 600; }
+.diff-syl.extra {
+  background: rgba(255, 107, 107, 0.16);
+  color: var(--bad);
+  text-decoration: line-through;
+  opacity: 0.8;
+}
+.ppl-line-status {
+  font-size: 0.85rem;
+  margin-top: 6px;
+  color: var(--subtle);
+}
+.pinyin-practice-summary {
+  margin-top: 12px;
+  font-size: 0.95rem;
+  text-align: left;
+}

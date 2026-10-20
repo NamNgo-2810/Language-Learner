@@ -248,7 +248,19 @@
     </div>
     <div class="button-row">
       <button class="secondary-btn" id="speak-story-btn" disabled>🔊 Speak</button>
+      <button class="secondary-btn" id="pinyin-practice-btn" disabled>⌨️ Practice pinyin</button>
       <button class="secondary-btn" id="back-from-story-btn">← back</button>
+    </div>
+
+    <!-- Pinyin practice: type each line's pinyin, then diff against the answer -->
+    <div id="pinyin-practice" class="pinyin-practice hidden">
+      <p class="subtle">Type the pinyin for each line, then check your answers.</p>
+      <div id="pinyin-practice-lines"></div>
+      <div class="button-row">
+        <button class="primary-btn" id="pinyin-check-btn">✓ Check pinyin</button>
+        <button class="secondary-btn" id="pinyin-clear-btn">Clear</button>
+      </div>
+      <div id="pinyin-practice-summary" class="pinyin-practice-summary"></div>
     </div>
   </section>
 

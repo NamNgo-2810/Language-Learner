@@ -505,6 +505,9 @@ function bindStaticEvents() {
   el("generate-story-btn").addEventListener("click", generateReviewStory);
   el("story-format").addEventListener("change", updateStoryLengthLabel);
   el("speak-story-btn").addEventListener("click", toggleSpeakStory);
+  el("pinyin-practice-btn").addEventListener("click", togglePinyinPractice);
+  el("pinyin-check-btn").addEventListener("click", checkPinyinPractice);
+  el("pinyin-clear-btn").addEventListener("click", clearPinyinPractice);
   el("back-from-story-btn").addEventListener("click", () => {
     stopSpeaking();
     showScreen("mode");
@@ -1188,6 +1191,8 @@ function startReviewStory() {
   stopSpeaking();
   currentStoryText = "";
   el("speak-story-btn").disabled = true;
+  el("pinyin-practice-btn").disabled = true;
+  resetPinyinPractice();
   el("story-text").textContent = "Choose a difficulty and length, then generate a story.";
   const n = activePool().length;
   const scoped = state.activeEntries && state.activeEntries.length ? " from the days you picked" : "";
@@ -1288,6 +1293,217 @@ function renderReviewStory(story) {
   });
 
   el("speak-story-btn").disabled = !story;
+  el("pinyin-practice-btn").disabled = !story;
+  // A freshly generated story resets any open practice panel.
+  resetPinyinPractice();
+}
+
+// ---------- story pinyin practice ----------
+
+// Splits the story into practice lines: real newlines first (conversation
+// format), otherwise sentence-by-sentence on Chinese/ASCII sentence punctuation
+// so each line is a bite-sized chunk to type.
+function splitStoryLines(story) {
+  const byNewline = story.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  if (byNewline.length > 1) return byNewline;
+  // Single block: split after sentence-ending punctuation, keeping the mark.
+  return story
+    .split(/(?<=[。！？!?…])/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function resetPinyinPractice() {
+  el("pinyin-practice").classList.add("hidden");
+  el("pinyin-practice-lines").innerHTML = "";
+  el("pinyin-practice-summary").textContent = "";
+  el("pinyin-practice-btn").textContent = "⌨️ Practice pinyin";
+  expectedPinyinCache.clear();
+}
+
+function togglePinyinPractice() {
+  const panel = el("pinyin-practice");
+  if (!panel.classList.contains("hidden")) {
+    resetPinyinPractice();
+    return;
+  }
+  if (!currentStoryText) return;
+  buildPinyinPractice(currentStoryText);
+  panel.classList.remove("hidden");
+  el("pinyin-practice-btn").textContent = "⌨️ Hide practice";
+  panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+// Builds one row per line: the Chinese text, an input for the pinyin, and an
+// (initially empty) diff area.
+function buildPinyinPractice(story) {
+  const container = el("pinyin-practice-lines");
+  container.innerHTML = "";
+  el("pinyin-practice-summary").textContent = "";
+
+  const lines = splitStoryLines(story);
+  lines.forEach((line, i) => {
+    const row = document.createElement("div");
+    row.className = "pinyin-practice-line";
+    row.dataset.line = line;
+    row.innerHTML =
+      `<div class="ppl-chinese">${escapeHtml(line)}</div>` +
+      `<input type="text" class="ppl-input" data-index="${i}" autocomplete="off" ` +
+      `autocapitalize="off" spellcheck="false" placeholder="type the pinyin for this line">` +
+      `<div class="ppl-diff"></div>` +
+      `<div class="ppl-line-status"></div>`;
+    container.appendChild(row);
+  });
+
+  // Enter in a line input moves to the next one.
+  const inputs = [...container.querySelectorAll(".ppl-input")];
+  inputs.forEach((input, i) => {
+    input.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      if (i + 1 < inputs.length) inputs[i + 1].focus();
+      else checkPinyinPractice();
+    });
+  });
+}
+
+function clearPinyinPractice() {
+  el("pinyin-practice-lines").querySelectorAll(".ppl-input").forEach((inp) => {
+    inp.value = "";
+    inp.classList.remove("line-correct", "line-wrong");
+  });
+  el("pinyin-practice-lines").querySelectorAll(".ppl-diff").forEach((d) => {
+    d.classList.remove("show");
+    d.innerHTML = "";
+  });
+  el("pinyin-practice-lines").querySelectorAll(".ppl-line-status").forEach((s) => (s.textContent = ""));
+  el("pinyin-practice-summary").textContent = "";
+}
+
+// Converts a line's characters to the expected pinyin, then diffs the typed
+// answer against it syllable by syllable (tone-aware). Expected pinyin comes
+// from the server's /api/pinyin (same engine used everywhere else).
+async function checkPinyinPractice() {
+  const rows = [...el("pinyin-practice-lines").querySelectorAll(".pinyin-practice-line")];
+  if (!rows.length) return;
+
+  const checkBtn = el("pinyin-check-btn");
+  checkBtn.disabled = true;
+  checkBtn.textContent = "Checking…";
+
+  let totalSyl = 0;
+  let correctSyl = 0;
+  let perfectLines = 0;
+
+  try {
+    for (const row of rows) {
+      const input = row.querySelector(".ppl-input");
+      const diffEl = row.querySelector(".ppl-diff");
+      const statusEl = row.querySelector(".ppl-line-status");
+
+      const expected = await expectedPinyinFor(row.dataset.line);
+      const expectedSyls = splitPinyinSyllables(expected);
+      const yourSyls = splitPinyinSyllables(input.value);
+
+      const diff = diffPinyin(yourSyls, expectedSyls);
+      diffEl.innerHTML = diff.html;
+      diffEl.classList.add("show");
+
+      totalSyl += diff.total;
+      correctSyl += diff.correct;
+      const linePerfect = diff.correct === diff.total && diff.total > 0 && yourSyls.length === expectedSyls.length;
+      if (linePerfect) perfectLines++;
+
+      input.classList.toggle("line-correct", linePerfect);
+      input.classList.toggle("line-wrong", !linePerfect);
+      statusEl.textContent = diff.total
+        ? `${diff.correct} / ${diff.total} syllables correct`
+        : "";
+    }
+
+    const pct = totalSyl ? Math.round((correctSyl / totalSyl) * 100) : 0;
+    el("pinyin-practice-summary").innerHTML =
+      `<strong>${correctSyl} / ${totalSyl}</strong> syllables correct across all lines ` +
+      `(${pct}%) · ${perfectLines} / ${rows.length} lines perfect`;
+  } finally {
+    checkBtn.disabled = false;
+    checkBtn.textContent = "✓ Check pinyin";
+  }
+}
+
+// Caches expected pinyin per line so re-checking doesn't re-hit the server.
+const expectedPinyinCache = new Map();
+
+async function expectedPinyinFor(line) {
+  if (expectedPinyinCache.has(line)) return expectedPinyinCache.get(line);
+  try {
+    const res = await fetch("/api/pinyin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ char: line }),
+    });
+    const data = await res.json();
+    const pinyin = res.ok && data.ok ? data.pinyin || "" : "";
+    expectedPinyinCache.set(line, pinyin);
+    return pinyin;
+  } catch {
+    return "";
+  }
+}
+
+// Normalizes a pinyin string into comparable syllables. Drops anything that
+// isn't a pinyin syllable (punctuation, stray marks) so only real syllables are
+// compared. Each syllable is kept in both display form and a tone-numbered key.
+function splitPinyinSyllables(str) {
+  if (!str) return [];
+  return str
+    .toLowerCase()
+    .normalize("NFD") // decompose so tone marks become combining chars first
+    .replace(/[^a-zü\u0300-\u036f0-9\s]/g, " ") // drop punctuation, keep letters/marks/digits
+    .split(/\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((syl) => ({ display: syl.normalize("NFC"), key: toneNumberedSyllable(syl) }));
+}
+
+// Longest-common-subsequence diff over tone-numbered syllable keys, so a single
+// missing or extra syllable doesn't knock everything after it out of alignment.
+function diffPinyin(yours, expected) {
+  const n = yours.length;
+  const m = expected.length;
+  const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = yours[i].key === expected[j].key
+        ? dp[i + 1][j + 1] + 1
+        : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+
+  const parts = [];
+  let correct = 0;
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (yours[i].key === expected[j].key) {
+      parts.push(`<span class="diff-syl ok">${escapeHtml(expected[j].display)}</span>`);
+      correct++;
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      // extra syllable the learner typed
+      parts.push(`<span class="diff-syl extra">${escapeHtml(yours[i].display)}</span>`);
+      i++;
+    } else {
+      // syllable the learner missed
+      parts.push(`<span class="diff-syl missing">${escapeHtml(expected[j].display)}</span>`);
+      j++;
+    }
+  }
+  while (i < n) parts.push(`<span class="diff-syl extra">${escapeHtml(yours[i++].display)}</span>`);
+  while (j < m) parts.push(`<span class="diff-syl missing">${escapeHtml(expected[j++].display)}</span>`);
+
+  return { html: parts.join(""), correct, total: m };
 }
 
 // ---------- story text-to-speech ----------
