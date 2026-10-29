@@ -5,9 +5,8 @@ services:
     plan: free
     buildCommand: npm install
     startCommand: npm start
+    # No ANTHROPIC_API_KEY: all AI runs through local-bridge.js on your own machine.
     envVars:
-      - key: ANTHROPIC_API_KEY
-        sync: false
       - key: APP_USERNAME
         sync: false
       - key: APP_PASSWORD

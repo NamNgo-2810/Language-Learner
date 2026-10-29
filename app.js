@@ -43,6 +43,60 @@ const state = {
 
 const el = (id) => document.getElementById(id);
 
+// ---------- AI via the local bridge ----------
+
+// Every Claude call goes to local-bridge.js on this machine, which runs the
+// Claude Code CLI, so the cloud server needs no Anthropic API key. Anything
+// that has to persist (Hán Việt, chiết tự, grammar) is then saved through the
+// cloud server's sheet endpoints.
+const LOCAL_BRIDGE_URL = "http://localhost:8421";
+const BRIDGE_UNREACHABLE =
+  "can't reach the local bridge — is `node local-bridge.js` running on this machine, " +
+  "and did you allow this site to access local devices?";
+
+async function postJSON(url, payload, unreachableMessage) {
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    throw new Error(unreachableMessage || "network error");
+  }
+  let data = {};
+  try {
+    data = await res.json();
+  } catch {
+    // non-JSON error page; reported below
+  }
+  if (!res.ok || !data.ok) throw new Error(data.error || `request failed (${res.status})`);
+  return data;
+}
+
+// POST to a bridge task, e.g. callBridge("/api/hanviet", { char }).
+function callBridge(path, payload) {
+  return postJSON(LOCAL_BRIDGE_URL + path, payload, BRIDGE_UNREACHABLE);
+}
+
+// POST to the cloud server (same origin).
+function callServer(path, payload) {
+  return postJSON(path, payload, "can't reach the server");
+}
+
+// Grammar structure names already saved for this language, so Claude reuses
+// the exact name when a word shares a structure (practice stats are keyed by
+// name). `excludeChar` leaves one word's own names out, e.g. when regenerating it.
+function knownGrammarPatterns(excludeChar) {
+  const names = new Set();
+  state.entries.forEach((e) => {
+    if (e.char === excludeChar) return;
+    (e.grammar || []).forEach((g) => g && g.pattern && names.add(g.pattern));
+  });
+  return [...names];
+}
+
 const screens = {
   language: el("screen-language"),
   mode: el("screen-mode"),
@@ -995,24 +1049,33 @@ function flipFlashcard() {
 // Called as soon as a flashcard question is shown. Dedupes concurrent calls
 // for the same entry via a cached in-flight promise.
 function ensureHanViet(entry) {
-  if (entry.hanViet) return Promise.resolve();
-  if (entry._hanVietPromise) return entry._hanVietPromise;
-  entry._hanVietPromise = fetch("/api/hanviet", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ char: entry.char, languageId: state.currentLanguage.id }),
-  })
-    .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
-    .then(({ ok, data }) => {
-      if (ok && data.ok && data.hanViet) entry.hanViet = data.hanViet;
+  return ensureCachedWordField(entry, "hanViet", "/api/hanviet");
+}
+
+// Shared by Hán Việt and chiết tự: values already in the sheet arrive with
+// the word list, so this only runs for words that don't have one yet. It asks
+// the bridge, then saves the answer to the sheet so it's never asked again.
+// Dedupes concurrent calls for the same entry via a cached in-flight promise.
+// Failures are ignored: both are nice-to-haves, not critical to the flashcard.
+function ensureCachedWordField(entry, field, bridgePath) {
+  if (entry[field]) return Promise.resolve();
+  const key = `_${field}Promise`;
+  if (entry[key]) return entry[key];
+  const languageId = state.currentLanguage.id;
+  entry[key] = callBridge(bridgePath, { char: entry.char })
+    .then((data) => {
+      const value = data[field];
+      if (!value) return;
+      state.entries.filter((e) => e.char === entry.char).concat(entry).forEach((e) => (e[field] = value));
+      callServer("/api/save-word-info", { languageId, char: entry.char, [field]: value }).catch(() => {
+        // not saved — it'll just be generated again next session
+      });
     })
-    .catch(() => {
-      // ignore — Hán Việt is a nice-to-have, not critical to the flashcard
-    })
+    .catch(() => {})
     .finally(() => {
-      entry._hanVietPromise = null;
+      entry[key] = null;
     });
-  return entry._hanVietPromise;
+  return entry[key];
 }
 
 // Fetches (and caches, per entry) the chiết tự (character component)
@@ -1020,24 +1083,7 @@ function ensureHanViet(entry) {
 // Called as soon as a flashcard question is shown. Dedupes concurrent calls
 // for the same entry via a cached in-flight promise.
 function ensureChietu(entry) {
-  if (entry.chietu) return Promise.resolve();
-  if (entry._chietuPromise) return entry._chietuPromise;
-  entry._chietuPromise = fetch("/api/chietu", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ char: entry.char, languageId: state.currentLanguage.id }),
-  })
-    .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
-    .then(({ ok, data }) => {
-      if (ok && data.ok && data.chietu) entry.chietu = data.chietu;
-    })
-    .catch(() => {
-      // ignore — chiết tự is a nice-to-have, not critical to the flashcard
-    })
-    .finally(() => {
-      entry._chietuPromise = null;
-    });
-  return entry._chietuPromise;
+  return ensureCachedWordField(entry, "chietu", "/api/chietu");
 }
 
 function renderFlashcardGrammar(entry) {
@@ -1058,8 +1104,8 @@ function renderFlashcardGrammar(entry) {
   box.classList.toggle("hidden", !list.length);
 }
 
-// Re-asks Opus for the flipped card's Hán Việt, chiết tự and grammar; the
-// server overwrites the sheet, and the card updates in place.
+// Re-asks Claude (via the bridge) for the flipped card's Hán Việt, chiết tự and
+// grammar, overwrites the sheet, and updates the card in place.
 async function regenerateCurrentWord() {
   const entry = currentEntry();
   if (!entry) return;
@@ -1067,13 +1113,19 @@ async function regenerateCurrentWord() {
   btn.disabled = true;
   btn.textContent = "Regenerating…";
   try {
-    const res = await fetch("/api/regenerate-word", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ languageId: state.currentLanguage.id, char: entry.char }),
+    const data = await callBridge("/api/word-info", {
+      char: entry.char,
+      pinyin: entry.pinyin,
+      // Leave this word's own old names out so they don't anchor the new answer.
+      knownPatterns: knownGrammarPatterns(entry.char),
     });
-    const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || "regeneration failed");
+    await callServer("/api/save-word-info", {
+      languageId: state.currentLanguage.id,
+      char: entry.char,
+      hanViet: data.hanViet,
+      chietu: data.chietu,
+      grammar: data.grammar,
+    });
     // Every copy of the word in this session shares the new values.
     state.entries
       .filter((e) => e.char === entry.char)
@@ -1231,19 +1283,7 @@ async function generateReviewStory() {
   btn.disabled = true;
 
   try {
-    const res = await fetch("/api/generate-review-story", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        languageId: state.currentLanguage.id,
-        words,
-        hskLevel,
-        length,
-        format,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || "generation failed");
+    const data = await callBridge("/api/generate-review-story", { words, hskLevel, length, format });
     renderReviewStory(data.story);
     const used = words.filter((w) => data.story.includes(w.char));
     const skippedFocus = words.filter((w) => w.focus && !data.story.includes(w.char));
@@ -1743,29 +1783,48 @@ function updateGrammarScanStatus() {
   el("grammar-scan-btn").disabled = !unchecked;
 }
 
-// Sends every not-yet-scanned word to Claude in one request; the server saves
-// the results to the sheet and returns them so the session updates in place.
+// Words per bridge call. Each batch is saved before the next starts, so a long
+// list keeps its progress if a later batch fails.
+const GRAMMAR_SCAN_BATCH = 80;
+
+// Sends every not-yet-scanned word to Claude (via the bridge) in batches, saves
+// each batch to the sheet, and updates the session in place. Words that come
+// back with no structures are saved as an empty list ("scanned, none").
 async function scanOldWordsForGrammar() {
   const btn = el("grammar-scan-btn");
   const status = el("grammar-scan-status");
+  const languageId = state.currentLanguage.id;
+  // Duplicate rows of the same word are scanned once; the server updates them all.
+  const pending = [
+    ...new Map(state.entries.filter((e) => e.grammar == null).map((e) => [e.char, e])).values(),
+  ].map((e) => ({ char: e.char, pinyin: e.pinyin }));
+  if (!pending.length) return;
+
   btn.disabled = true;
-  status.textContent = "Scanning your words for grammar structures… (this can take a minute)";
+  let scanned = 0;
+  let found = 0;
   try {
-    const res = await fetch("/api/grammar-backfill", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ languageId: state.currentLanguage.id }),
-    });
-    const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || "scan failed");
-    const byChar = new Map(data.words.map((w) => [w.char, w.grammar]));
-    state.entries.forEach((e) => {
-      if (e.grammar == null && byChar.has(e.char)) e.grammar = byChar.get(e.char);
-    });
+    for (let i = 0; i < pending.length; i += GRAMMAR_SCAN_BATCH) {
+      const batch = pending.slice(i, i + GRAMMAR_SCAN_BATCH);
+      status.textContent =
+        `Scanning your words for grammar structures… ${scanned} of ${pending.length} done (each batch can take a few minutes)`;
+      const data = await callBridge("/api/grammar-batch", { words: batch, knownPatterns: knownGrammarPatterns() });
+      const byChar = new Map(data.words.map((w) => [w.char, w.grammar]));
+      const results = batch.map((w) => ({ char: w.char, grammar: byChar.get(w.char) || [] }));
+      await callServer("/api/save-grammar", { languageId, words: results });
+      results.forEach(({ char, grammar }) => {
+        state.entries.forEach((e) => {
+          if (e.char === char && e.grammar == null) e.grammar = grammar;
+        });
+      });
+      scanned += batch.length;
+      found += byChar.size;
+    }
     updateGrammarScanStatus();
-    status.textContent = `Scanned ${data.scanned} word${data.scanned === 1 ? "" : "s"}, ${data.found} with grammar structures · ` + status.textContent;
+    status.textContent = `Scanned ${scanned} word${scanned === 1 ? "" : "s"}, ${found} with grammar structures · ` + status.textContent;
   } catch (err) {
-    status.textContent = `Couldn't scan: ${err.message}`;
+    updateGrammarScanStatus();
+    status.textContent = `Couldn't scan${scanned ? ` past ${scanned} words (those are saved)` : ""}: ${err.message}`;
     btn.disabled = false;
   }
 }
@@ -1802,20 +1861,14 @@ async function newComposeTask() {
   el("compose-feedback").classList.add("hidden");
 
   try {
-    const res = await fetch("/api/compose-task", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        kind,
-        words,
-        hskLevel: Number(el("compose-hsk").value),
-        lang: "vi",
-        weakPatterns: weakPatterns(),
-        pattern: grammarItem ? grammarItem.pattern : undefined,
-      }),
+    const data = await callBridge("/api/compose-task", {
+      kind,
+      words,
+      hskLevel: Number(el("compose-hsk").value),
+      lang: "vi",
+      weakPatterns: weakPatterns(),
+      pattern: grammarItem ? grammarItem.pattern : undefined,
     });
-    const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || "couldn't create a task");
     composeTask = { ...data, grammar: grammarItem };
     composeRecorded = false;
     renderComposeTask(data);
@@ -1863,22 +1916,16 @@ async function checkComposition() {
   feedbackEl.innerHTML = `<p class="subtle">Checking your writing…</p>`;
 
   try {
-    const res = await fetch("/api/compose-feedback", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        kind: composeTask.kind,
-        task: composeTask.task,
-        source: composeTask.source,
-        text,
-        words: composeTask.words,
-        pattern: composeTask.pattern,
-        hskLevel: Number(el("compose-hsk").value),
-        lang: "vi",
-      }),
+    const data = await callBridge("/api/compose-feedback", {
+      kind: composeTask.kind,
+      task: composeTask.task,
+      source: composeTask.source,
+      text,
+      words: composeTask.words,
+      pattern: composeTask.pattern,
+      hskLevel: Number(el("compose-hsk").value),
+      lang: "vi",
     });
-    const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || "grading failed");
     renderComposeFeedback(data, text);
     if (!composeRecorded) {
       recordComposeResults(data);
@@ -2164,14 +2211,7 @@ async function generateSentenceForAdd() {
   btn.textContent = "Generating...";
 
   try {
-    const res = await fetch("/api/generate-sentence", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ char, pinyin }),
-    });
-    const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || "generation failed");
-
+    const data = await callBridge("/api/generate-sentence", { char, pinyin });
     el("add-sentence").value = data.sentence;
     feedback.textContent = "Sentence generated — feel free to edit it before adding.";
     feedback.className = "correct";
@@ -2198,18 +2238,31 @@ async function submitNewCharacter() {
     return;
   }
 
-  feedback.textContent = "Saving...";
   feedback.className = "";
 
+  // Ask Claude (via the bridge) for the Hán Việt, chiết tự and grammar up
+  // front, so they're saved with the word. Best-effort: if the bridge isn't
+  // running the word is still added, Hán Việt / chiết tự get filled in the
+  // first time its flashcard is shown, and grammar by the scan button.
+  let info = null;
+  let infoError = "";
+  try {
+    feedback.textContent = "Annotating with Claude (Hán Việt, chiết tự, grammar)… this can take up to a minute";
+    const pinyinHint = pinyinInput.value.trim() || (await expectedPinyinFor(char));
+    info = await callBridge("/api/word-info", { char, pinyin: pinyinHint, knownPatterns: knownGrammarPatterns() });
+  } catch (err) {
+    infoError = err.message;
+  }
+
+  feedback.textContent = "Saving...";
   try {
     // Pinyin is generated server-side from the character; no need to send it.
-    const res = await fetch("/api/add-word", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ languageId: state.currentLanguage.id, char, sentence: sentence || undefined }),
+    const data = await callServer("/api/add-word", {
+      languageId: state.currentLanguage.id,
+      char,
+      sentence: sentence || undefined,
+      ...(info ? { hanViet: info.hanViet, chietu: info.chietu, grammar: info.grammar } : {}),
     });
-    const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || "save failed");
 
     const pinyin = data.pinyin || pinyinInput.value.trim();
 
@@ -2224,7 +2277,8 @@ async function submitNewCharacter() {
       grammar: data.grammar || null,
       pinyinVariants: data.pinyinVariants || [],
     });
-    feedback.textContent = `Added ${char} ${pinyin}`;
+    feedback.textContent =
+      `Added ${char} ${pinyin}` + (infoError ? ` (without Hán Việt / chiết tự / grammar: ${infoError})` : "");
     feedback.className = "correct";
 
     const row = document.createElement("div");
@@ -2243,7 +2297,7 @@ async function submitNewCharacter() {
     el("add-confusable-warning").classList.add("hidden");
     charInput.focus();
   } catch (err) {
-    feedback.textContent = `Couldn't save: ${err.message}. Is the server running (npm start)?`;
+    feedback.textContent = `Couldn't save: ${err.message}`;
     feedback.className = "incorrect";
   }
 }
@@ -2353,13 +2407,8 @@ async function renderConfusableContext(entry) {
 
   let pinyinContext = null;
   try {
-    const res = await fetch("/api/generate-confusable-context", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ char: entry.char, pinyin: entry.pinyin }),
-    });
-    const data = await res.json();
-    if (res.ok && data.ok) pinyinContext = data.pinyinContext;
+    const data = await callBridge("/api/generate-confusable-context", { char: entry.char, pinyin: entry.pinyin });
+    pinyinContext = data.pinyinContext;
   } catch {
     // ignore — fall back below
   }
@@ -2439,27 +2488,25 @@ async function renderSentenceBuilder(entry) {
   let chunks = null;
   let sentencePinyin = "";
   let validOrders = [];
+  let generationError = "";
   try {
-    const res = await fetch("/api/generate-practice-sentence", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ words: entry.words || [], avoid: loadSentenceHistory().slice(-15) }),
+    const data = await callBridge("/api/generate-practice-sentence", {
+      words: entry.words || [],
+      avoid: loadSentenceHistory().slice(-15),
     });
-    const data = await res.json();
-    if (res.ok && data.ok) {
-      sentence = data.sentence;
-      chunks = data.chunks;
-      sentencePinyin = data.sentencePinyin || "";
-      validOrders = Array.isArray(data.validOrders) && data.validOrders.length ? data.validOrders : [chunks];
-    }
-  } catch {
-    // ignore — handled below
+    sentence = data.sentence;
+    chunks = data.chunks;
+    validOrders = Array.isArray(data.validOrders) && data.validOrders.length ? data.validOrders : [chunks];
+    // The bridge has no pinyin engine; the cloud server converts it.
+    sentencePinyin = await expectedPinyinFor(sentence);
+  } catch (err) {
+    generationError = err.message;
   }
 
   if (token !== currentQuestionToken) return;
 
   if (!sentence || !Array.isArray(chunks) || chunks.length < 2) {
-    el("dnd-status").textContent = "Couldn't generate a sentence — skipping.";
+    el("dnd-status").textContent = `Couldn't generate a sentence${generationError ? ` (${generationError})` : ""} — skipping.`;
     el("dnd-check-btn").classList.add("hidden");
     el("dnd-reset-btn").classList.add("hidden");
     el("dnd-next-btn").classList.remove("hidden");
