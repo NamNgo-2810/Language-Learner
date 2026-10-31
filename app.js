@@ -2968,6 +2968,7 @@ function renderStrokes(entry) {
   el("quiz-prompt").className = "prompt pinyin-prompt";
   el("quiz-prompt").textContent = entry.pinyin;
   el("strokes-area").classList.remove("hidden");
+  renderStrokesContext(entry);
   el("strokes-done").textContent = "";
   setStrokeStatus("");
   el("strokes-controls").classList.remove("hidden");
@@ -3013,6 +3014,53 @@ function renderStrokes(entry) {
     },
   });
   startStrokeQuiz(run);
+}
+
+// The same pinyin fits many characters (shì: 是 事 市 室…), so the prompt also
+// shows a sentence with the word blanked out and, if enabled, the Hán Việt
+// reading. The sentence is the word's own example sentence; words without one
+// get a generated sentence from the local bridge (cached on the entry).
+function renderStrokesContext(entry) {
+  const token = ++currentQuestionToken;
+  const hanViet = el("strokes-hanviet");
+  hanViet.classList.add("hidden");
+  hanViet.textContent = "";
+  const showHanViet = () => {
+    if (token !== currentQuestionToken || !entry.hanViet || !isHanVietEnabled()) return;
+    hanViet.textContent = `Hán Việt: ${entry.hanViet}`;
+    hanViet.classList.remove("hidden");
+  };
+  if (isHanVietEnabled()) {
+    if (entry.hanViet) showHanViet();
+    else ensureHanViet(entry).then(showHanViet, () => {});
+  }
+
+  if (entry.sentence && entry.sentence.includes(entry.char)) {
+    setSubprompt(sentenceBlankHTML(entry));
+    return;
+  }
+  if (entry.strokeContext) {
+    setSubprompt(entry.strokeContext);
+    return;
+  }
+  setSubprompt('<span class="subtle-inline">Loading a sentence for context…</span>');
+  callBridge("/api/generate-confusable-context", { char: entry.char, pinyin: entry.pinyin })
+    .then((data) => {
+      const sentence = String(data.sentence || "");
+      let html = null;
+      if (sentence.includes(entry.char)) {
+        html = sentence.split(entry.char).map(escapeHtml).join('<span class="blank">___</span>');
+      } else if (data.pinyinContext) {
+        html = escapeHtml(String(data.pinyinContext)).replace(/＿/g, '<span class="blank">___</span>');
+      }
+      if (html) entry.strokeContext = html;
+      if (token === currentQuestionToken) setSubprompt(html);
+    })
+    .catch(() => {
+      if (token === currentQuestionToken) {
+        setSubprompt('<span class="subtle-inline">No context sentence (local bridge not running). Add an example sentence to this word for context.</span>');
+      }
+    });
 }
 
 function setStrokeStatus(text, tone) {

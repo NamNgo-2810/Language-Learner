@@ -866,3 +866,5 @@ h2 { font-size: 1.15rem; margin: 0 0 4px; }
 .strokes-status { font-size: 0.95rem; color: var(--subtle); min-height: 1.4rem; }
 .strokes-status.correct { color: var(--good); }
 .strokes-status.incorrect { color: var(--bad); }
+.subprompt .subtle-inline { font-size: 0.9rem; font-style: italic; }
+#strokes-hanviet { margin: 0; }
