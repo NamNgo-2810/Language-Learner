@@ -600,15 +600,19 @@ async function generateGrammarBatch(data, signal) {
   return { words: found };
 }
 
-// POST /api/generate-review-story { words, hskLevel, length, format } -> { format, story }
+// POST /api/generate-review-story { words, hskLevel, length, format, wordSource } -> { format, story }
 // `words` carry a `focus` flag: focus words are the learner's newest ones and
 // should all be used; the rest are optional review words.
+// wordSource "freestyle" ignores `words` and lets the model write freely.
 async function generateReviewStory(data, signal) {
-  const words = (Array.isArray(data.words) ? data.words : [])
-    .map((w) => ({ char: str(w && w.char, 30), pinyin: str(w && w.pinyin, 80), focus: Boolean(w && w.focus) }))
-    .filter((w) => w.char && w.pinyin)
-    .slice(0, 500);
-  if (!words.length) throw new RequestError(400, "words (array of {char, pinyin}) is required");
+  const freestyle = data.wordSource === "freestyle";
+  const words = freestyle
+    ? []
+    : (Array.isArray(data.words) ? data.words : [])
+        .map((w) => ({ char: str(w && w.char, 30), pinyin: str(w && w.pinyin, 80), focus: Boolean(w && w.focus) }))
+        .filter((w) => w.char && w.pinyin)
+        .slice(0, 500);
+  if (!freestyle && !words.length) throw new RequestError(400, "words (array of {char, pinyin}) is required");
   const hskLevel = clampInt(data.hskLevel, 1, 6, 3);
   const length = clampInt(data.length, 1, 20, 5);
   const format = data.format === "conversation" ? "conversation" : "story";
@@ -643,7 +647,9 @@ async function generateReviewStory(data, signal) {
         : `You write a short story in Mandarin Chinese at approximately HSK level ${hskLevel} (on the 1-6 scale, where 1 is absolute beginner and 6 is advanced) — keep the vocabulary and grammar at or below that level. ` +
           `Aim for about ${length} sentence${length === 1 ? "" : "s"}. `) +
       "Build it on the setting, character, situation and tone given in the request — follow that scenario rather than substituting a premise of your own, and give it concrete, specific details. " +
-      "Use every focus word (they're the words the learner just learned); for the review words, weave in as many as fit comfortably at that level. You may freely use other words the text needs, but never force an awkward line just to include a word. " +
+      (freestyle
+        ? "Choose whatever vocabulary suits the scenario and level; use natural, everyday words a learner at that level would meet. "
+        : "Use every focus word (they're the words the learner just learned); for the review words, weave in as many as fit comfortably at that level. You may freely use other words the text needs, but never force an awkward line just to include a word. ") +
       "Reply with the Chinese characters only — no pinyin, no translation, no extra commentary.",
     user: lines.join("\n"),
   });
