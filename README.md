@@ -117,12 +117,14 @@ Set `GOOGLE_SERVICE_ACCOUNT_JSON` (the full key file contents, one line) and `GO
 
 ## Add words
 
-Each language is a worksheet (tab) in your Google Sheet, one word per row across four columns:
+Each language is a worksheet (tab) in your Google Sheet, one word per row. Words added in the app start at **column D** (columns A–C stay empty):
 
-| char | pinyin | sentence | session |
-|---|---|---|---|
-| 你 | nǐ | | 2026-09-06 |
-| 事 | shì | 这是一件小事。 | 2026-09-06 |
+| D: char | E: pinyin | F: sentence | G: session | H: chiết tự | I: Hán Việt | J: grammar |
+|---|---|---|---|---|---|---|
+| 你 | nǐ | | 2026-09-06 | | | |
+| 事 | shì | 这是一件小事。 | 2026-09-06 | | | |
+
+Older rows that start at column A (char=A, pinyin=B, sentence=C, session=D) are still read, so you don't need to move them. `npm run migrate` also still writes that older A–D layout.
 
 The `session` column holds a date (`YYYY-MM-DD`) — all rows sharing a date are one class session, which is how the app knows which words are newest.
 
@@ -146,12 +148,18 @@ You can add words two ways:
 - **Flashcards** – see the character, reveal the reading, self-rate.
 - **Character → Pinyin** / **Pinyin → Character** – multiple choice.
 - **Type the Pinyin** – free-typed recall, graded with tones (`ni3` or `nǐ` match `nǐ`; spaces between syllables optional).
+- **Listening** – the browser speaks the word (🔊 play again, 🐢 slower, or 📖 hear it in your example sentence) and you pick the character. Wrong options never sound identical to the answer (是 and 事 are both `shì`, so they're never paired), and words with the same syllables but a different tone (十 `shí`, 使 `shǐ`) are picked first, so it doubles as a tone test. Uses the browser's built-in speech; Chrome and Edge include Chinese voices.
+- **Stroke Order** – see the pinyin, then write the character on screen with mouse, finger or pen. Each stroke is checked using [Hanzi Writer](https://hanziwriter.org/), and after 3 misses on a stroke it highlights where the stroke goes. **💡 Show outline** shows a faint outline and **▶ Show me** plays the stroke order; either one counts the word as a miss. A word counts as known with up to 2 wrong strokes per character. Multi-character words are written one character at a time. Needs internet: the library and stroke data load from cdn.jsdelivr.net. If a character has no stroke data, you write it on paper and rate yourself instead.
 - **Writing Practice** – see the pinyin only, write the character in your notebook, use **Hint** for a blurred peek at the character before **Show answer** reveals it fully, then self-rate. An optional **Show sentence hint** button gives a fill-in-the-blank sentence as an extra clue.
 - **Confusables** – only for characters that share a pinyin with at least one other character in your list (e.g. 是/事/世, all `shì`). Shows the pinyin (plus sentence, if one exists) and asks you to pick the right character from among its actual look-alikes, instead of random distractors.
 - **Sentence Practice** – shows one of your example sentences with the target word blanked out; you pick the character that fills the blank. Only includes words that have a sentence attached, so add some via the **+ Add new characters** screen to unlock it.
 - **Sentence Builder** – drag shuffled chunks of a generated sentence back into order. Each sentence is built around one of your newest words (cycled so each gets a turn), sometimes plus another word from your list, with a random topic and grammar pattern for its HSK level. Recent sentences are remembered so they aren't repeated.
 - **Review Story** – asks Claude to write a short story or conversation from a fresh random mix of your words: up to 5 of your newest words (which it must use) plus a random handful of others, weighted toward the weak ones. The scenario (setting, character, what happens, tone) is drawn at random for every story, so premises don't repeat. Afterwards it shows how many picked words made it in and any new words it skipped. Check **Study everything** to send your whole list instead. Requires the [local bridge](#ai-features-local-bridge).
 - **Write in Chinese** – typed writing practice for grammar. Choose **Translate** (Claude writes 2–4 sentences in English or Vietnamese for you to write in Chinese) or **Free writing** (a random topic to write 3–5 sentences about). Every task gives you 2–3 of your words (mostly new ones) and one grammar pattern for the chosen HSK level. After you type your answer, Claude returns your text with corrections highlighted, each mistake with a short explanation of the rule (in English or Vietnamese), whether you used each target word and the pattern correctly, and a more natural native-speaker version. Words you misuse count as misses in your word stats. Grammar patterns you get wrong or leave out are tracked in browser localStorage and picked more often until you get them right. You can edit your text and check again; only the first check of a task counts toward your stats. Requires the [local bridge](#ai-features-local-bridge).
+
+## Daily goal and streak
+
+Every answered question counts as one review, in any mode. The mode screen shows today's progress toward your daily goal (default 20, change it in the **Daily goal** box). The header shows `🔥 streak · reviews/goal`. Reaching the goal keeps your streak going, and you get a 🎉 message when you hit it. Your streak only breaks when a whole day ends without reaching the goal. Like word stats, this is stored in this browser's localStorage, so each device keeps its own count.
 
 ## Smart prioritization
 

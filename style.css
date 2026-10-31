@@ -781,3 +781,88 @@ h2 { font-size: 1.15rem; margin: 0 0 4px; }
   font-size: 0.95rem;
   text-align: left;
 }
+
+/* daily goal + streak */
+
+.today-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin-top: 12px;
+}
+.today-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.today-streak { font-weight: 600; }
+.today-goal {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--subtle);
+}
+.today-goal input {
+  width: 64px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.9rem;
+}
+.today-track { height: 8px; border-radius: 4px; }
+.progress-fill.done { background: var(--good); }
+.today-label { margin-top: 6px; font-size: 0.85rem; color: var(--subtle); }
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  background: var(--good);
+  color: #0f1220;
+  font-weight: 600;
+  padding: 12px 18px;
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  z-index: 1000;
+  animation: fadeIn 0.15s ease-out;
+}
+
+/* listening mode */
+
+.prompt.listening-prompt { font-size: 3rem; margin-bottom: 12px; }
+.listening-controls {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+/* stroke order mode */
+
+#strokes-area { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.strokes-done { font-size: 2rem; min-height: 2.4rem; color: var(--accent); }
+.strokes-target {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background-color: var(--bg);
+  /* 米字格-style guide lines: centre cross plus diagonals */
+  background-image:
+    linear-gradient(to right, transparent calc(50% - 0.5px), var(--border) calc(50% - 0.5px), var(--border) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(50% - 0.5px), var(--border) calc(50% - 0.5px), var(--border) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+    linear-gradient(to top right, transparent calc(50% - 0.5px), rgba(44, 49, 81, 0.6) 50%, transparent calc(50% + 0.5px)),
+    linear-gradient(to bottom right, transparent calc(50% - 0.5px), rgba(44, 49, 81, 0.6) 50%, transparent calc(50% + 0.5px));
+  touch-action: none; /* drawing shouldn't scroll the page on touch screens */
+}
+.strokes-target:empty { display: none; }
+.strokes-status { font-size: 0.95rem; color: var(--subtle); min-height: 1.4rem; }
+.strokes-status.correct { color: var(--good); }
+.strokes-status.incorrect { color: var(--bad); }

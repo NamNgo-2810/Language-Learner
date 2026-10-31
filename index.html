@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Language Learner</title>
 <link rel="stylesheet" href="style.css">
+<!-- Stroke-order practice (Hanzi Writer). Stroke data is fetched per character from the same CDN. -->
+<script defer src="https://cdn.jsdelivr.net/npm/hanzi-writer@3.7.3/dist/hanzi-writer.min.js"
+  integrity="sha384-xd6VpwMU5AxPFzG/nyhXrW70SSR2usiUNV8RrA0wlOjYlCrZyzZC6JiR/mT51pm2"
+  crossorigin="anonymous"></script>
 </head>
 <body>
 <div id="app">
@@ -24,6 +28,20 @@
   <section id="screen-mode" class="screen hidden">
     <h2 id="mode-lang-title"></h2>
     <p class="subtle" id="mode-count"></p>
+
+    <!-- Daily goal + streak (stored in this browser's localStorage) -->
+    <div class="today-card" id="today-card">
+      <div class="today-top">
+        <span class="today-streak" id="today-streak"></span>
+        <label class="today-goal">
+          Daily goal
+          <input type="number" id="daily-goal-input" min="5" max="500" step="5">
+        </label>
+      </div>
+      <div class="progress-track today-track"><div class="progress-fill" id="today-fill"></div></div>
+      <div class="today-label" id="today-label"></div>
+    </div>
+
     <div class="card-list">
       <button class="mode-card" data-mode="flashcard">
         <span class="mode-icon">🔁</span>
@@ -45,10 +63,20 @@
         <span class="mode-name">Type the Pinyin</span>
         <span class="mode-desc">Hardest mode, best for recall</span>
       </button>
+      <button class="mode-card" data-mode="listening">
+        <span class="mode-icon">🎧</span>
+        <span class="mode-name">Listening</span>
+        <span class="mode-desc">Hear the word, pick the character (wrong options differ by tone or sound)</span>
+      </button>
       <button class="mode-card" data-mode="writing">
         <span class="mode-icon">✍️</span>
         <span class="mode-name">Writing Practice</span>
         <span class="mode-desc">See the pinyin, write the character on paper</span>
+      </button>
+      <button class="mode-card" data-mode="strokes">
+        <span class="mode-icon">🖌️</span>
+        <span class="mode-name">Stroke Order</span>
+        <span class="mode-desc">See the pinyin, write the character on screen, each stroke is checked</span>
       </button>
       <button class="mode-card" data-mode="confusables" id="mode-confusables">
         <span class="mode-icon">🔀</span>
@@ -168,8 +196,31 @@
         </div>
       </div>
 
+      <!-- listening mode: replay controls (the choices reuse #mc-area) -->
+      <div id="listening-area" class="hidden listening-controls">
+        <button id="listen-play-btn" class="primary-btn" type="button">🔊 Play again</button>
+        <button id="listen-slow-btn" class="secondary-btn" type="button">🐢 Slower</button>
+        <button id="listen-sentence-btn" class="secondary-btn hidden" type="button">📖 Play in a sentence</button>
+      </div>
+
       <!-- multiple choice mode -->
       <div id="mc-area" class="hidden option-grid"></div>
+
+      <!-- stroke order mode (Hanzi Writer) -->
+      <div id="strokes-area" class="hidden">
+        <div class="strokes-done" id="strokes-done"></div>
+        <div class="strokes-target" id="strokes-target"></div>
+        <div class="strokes-status" id="strokes-status"></div>
+        <div class="rate-row" id="strokes-controls">
+          <button id="strokes-hint-btn" class="secondary-btn" type="button">💡 Show outline</button>
+          <button id="strokes-show-btn" class="secondary-btn" type="button">▶ Show me</button>
+        </div>
+        <div class="hidden rate-row" id="strokes-rate">
+          <button class="rate-btn wrong st-rate-btn" data-know="0">😵 Got it wrong</button>
+          <button class="rate-btn right st-rate-btn" data-know="1">😄 Got it right</button>
+        </div>
+        <button id="strokes-next-btn" class="primary-btn hidden" type="button">Next →</button>
+      </div>
 
       <!-- typing mode -->
       <div id="typing-area" class="hidden">
@@ -222,6 +273,13 @@
         <select id="story-format">
           <option value="story" selected>Story</option>
           <option value="conversation">Conversation</option>
+        </select>
+      </label>
+      <label class="story-control">
+        <span>Words</span>
+        <select id="story-word-source">
+          <option value="vocab" selected>Use my vocab</option>
+          <option value="freestyle">Freestyle</option>
         </select>
       </label>
       <label class="story-control">
@@ -313,6 +371,7 @@
   </section>
 
   <div id="pinyin-popup" class="pinyin-popup hidden"></div>
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
   <!-- Screen 4: results -->
   <section id="screen-results" class="screen hidden">

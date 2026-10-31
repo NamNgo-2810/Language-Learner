@@ -4,8 +4,8 @@
 // (tab) inside a spreadsheet, one word per row. There is no header row.
 //
 // Two row layouts coexist on the same tab and are both read as words:
-//   - native : char=A, pinyin=B, sentence=C, session=D   (written by this app)
-//   - form   : char=D, pinyin=E, timestamp=G             (e.g. a linked Google Form)
+//   - native : char=A, pinyin=B, sentence=C, session=D   (older rows from this app / migration)
+//   - form   : char=D, pinyin=E, sentence=F, timestamp=G (new words added in the app, or a linked Google Form)
 //
 // The session value (a YYYY-MM-DD date, or the date part of a timestamp)
 // replaces the old "## date" markdown headers — it's how the app figures out
@@ -216,21 +216,22 @@ async function lastSessionLabel(spreadsheetId, tab) {
   return null;
 }
 
-// Appends one word row. `session` is the YYYY-MM-DD label the row belongs to.
-// `chietu` (optional) is the chiết tự breakdown generated at add-time, cached
-// in column H so it's never re-requested from Claude later; `hanViet` likewise
-// in column I, and `grammar` (an array, or null if it couldn't be generated) in
-// column J.
+// Appends one word row in the "form" layout, starting at column D: char=D,
+// pinyin=E, sentence=F, session=G (columns A-C are left empty). `session` is
+// the YYYY-MM-DD label the row belongs to. `chietu` (optional) is the chiết tự
+// breakdown generated at add-time, cached in column H so it's never
+// re-requested from Claude later; `hanViet` likewise in column I, and
+// `grammar` (an array, or null if it couldn't be generated) in column J.
 async function appendEntry(spreadsheetId, tab, { char, pinyin, sentence, session, chietu, hanViet, grammar }) {
   const sheets = await getSheetsClient();
   await sheets.spreadsheets.values.append({
     spreadsheetId,
-    range: `${quoteTab(tab)}!A:J`,
+    range: `${quoteTab(tab)}!D:J`,
     valueInputOption: "RAW",
     insertDataOption: "INSERT_ROWS",
     requestBody: {
       values: [[
-        char, pinyin, sentence || "", session || "", "", "", "",
+        char, pinyin, sentence || "", session || "",
         chietu || "", hanViet || "", grammar ? JSON.stringify(grammar) : "",
       ]],
     },

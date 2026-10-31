@@ -126,6 +126,143 @@ function saveStats(stats) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(stats));
 }
 
+// ---------- daily goal & streak ----------
+// Every answered question (any mode, any language) counts as one review for
+// today. A day keeps the streak alive once its review count reaches the daily
+// goal; `met` is stored per day so changing the goal later doesn't rewrite
+// past days. Stored as { "YYYY-MM-DD": { n, met } } in local time.
+
+const ACTIVITY_KEY = "lang-learner-activity-v1";
+const DAILY_GOAL_KEY = "lang-learner-daily-goal";
+const DEFAULT_DAILY_GOAL = 20;
+const MIN_DAILY_GOAL = 5;
+const MAX_DAILY_GOAL = 500;
+
+function localDateKey(date = new Date()) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+// Noon on a YYYY-MM-DD key, so stepping by whole days never trips over DST.
+function dateFromKey(key) {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(y, m - 1, d, 12);
+}
+
+function loadActivity() {
+  try {
+    return JSON.parse(localStorage.getItem(ACTIVITY_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveActivity(activity) {
+  localStorage.setItem(ACTIVITY_KEY, JSON.stringify(activity));
+}
+
+function dailyGoal() {
+  const n = Number(localStorage.getItem(DAILY_GOAL_KEY));
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_DAILY_GOAL;
+  return Math.max(MIN_DAILY_GOAL, Math.min(MAX_DAILY_GOAL, Math.round(n)));
+}
+
+function setDailyGoal(value) {
+  const n = Math.max(MIN_DAILY_GOAL, Math.min(MAX_DAILY_GOAL, Math.round(Number(value) || DEFAULT_DAILY_GOAL)));
+  localStorage.setItem(DAILY_GOAL_KEY, String(n));
+  // Lowering the goal below today's count completes today right away.
+  const activity = loadActivity();
+  const today = activity[localDateKey()];
+  if (today && !today.met && today.n >= n) {
+    today.met = true;
+    saveActivity(activity);
+  }
+  renderDailyProgress();
+}
+
+// Consecutive goal-met days ending today, or ending yesterday if today's goal
+// isn't reached yet (the streak is still alive until midnight).
+function currentStreak(activity = loadActivity()) {
+  const day = new Date();
+  day.setHours(12, 0, 0, 0);
+  if (!(activity[localDateKey(day)] || {}).met) day.setDate(day.getDate() - 1);
+  let streak = 0;
+  while ((activity[localDateKey(day)] || {}).met) {
+    streak++;
+    day.setDate(day.getDate() - 1);
+  }
+  return streak;
+}
+
+function bestStreak(activity = loadActivity()) {
+  const metDays = Object.keys(activity).filter((k) => activity[k] && activity[k].met).sort();
+  let best = 0;
+  let run = 0;
+  let prev = null;
+  metDays.forEach((key) => {
+    const date = dateFromKey(key);
+    run = prev && Math.round((date - prev) / 86400000) === 1 ? run + 1 : 1;
+    best = Math.max(best, run);
+    prev = date;
+  });
+  return best;
+}
+
+// Counts one review for today; celebrates the moment the goal is reached.
+function logActivity() {
+  const activity = loadActivity();
+  const key = localDateKey();
+  const day = activity[key] || { n: 0, met: false };
+  day.n += 1;
+  const justMet = !day.met && day.n >= dailyGoal();
+  if (justMet) day.met = true;
+  activity[key] = day;
+  saveActivity(activity);
+  renderDailyProgress();
+  if (justMet) showToast(`🎉 Daily goal reached! 🔥 ${currentStreak(activity)}-day streak`);
+}
+
+// Updates the header badge and the "today" card on the mode screen.
+function renderDailyProgress() {
+  const activity = loadActivity();
+  const goal = dailyGoal();
+  const today = activity[localDateKey()] || { n: 0, met: false };
+  const streak = currentStreak(activity);
+  const best = bestStreak(activity);
+
+  const badge = el("stats-badge");
+  badge.textContent = `🔥 ${streak} · ${today.n}/${goal} today`;
+  badge.title = `Current streak: ${streak} day(s). Best: ${best}.`;
+  badge.classList.remove("hidden");
+
+  let streakText;
+  if (today.met) streakText = `🔥 ${streak}-day streak`;
+  else if (streak > 0) streakText = `🔥 ${streak}-day streak · reach today's goal to keep it`;
+  else streakText = "Reach your daily goal to start a streak";
+  el("today-streak").textContent = streakText;
+
+  el("today-fill").style.width = `${Math.min(100, (today.n / goal) * 100)}%`;
+  el("today-fill").classList.toggle("done", Boolean(today.met));
+  const progress = today.met ? "✓ goal reached" : `${goal - today.n} to go`;
+  el("today-label").textContent =
+    `${today.n} / ${goal} reviews today · ${progress}` + (best > 0 ? ` · best streak ${best}` : "");
+
+  const input = el("daily-goal-input");
+  if (document.activeElement !== input) input.value = String(goal);
+}
+
+let toastTimer = null;
+
+function showToast(message) {
+  const toast = el("toast");
+  toast.textContent = message;
+  toast.classList.remove("hidden");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.add("hidden"), 3500);
+}
+
 // How fast a "fluent" recall is (ms) vs. a "struggling" one. Answers at or
 // under FAST_MS count as fully fast; at or over SLOW_MS as fully slow; linear
 // in between. Tuned for typing tone-marked/numbered pinyin.
@@ -160,6 +297,7 @@ function recordResult(languageId, char, known, elapsedMs) {
   rec.lastSeen = Date.now();
   stats[languageId][char] = rec;
   saveStats(stats);
+  logActivity();
 }
 
 // 0 (never missed lately) .. 1 (missed every recent time). Records from before
@@ -404,6 +542,7 @@ async function init() {
   renderLanguageList();
   showScreen("language");
   bindStaticEvents();
+  renderDailyProgress();
 }
 
 function renderLanguageList() {
@@ -441,12 +580,38 @@ function refreshModeScreen() {
   const confusableCount = confusableGroups(state.entries).reduce((sum, g) => sum + g.length, 0);
   el("mode-count").textContent =
     `${state.entries.length} words loaded · ${withSentence} with example sentences · ${confusableCount} in confusable pairs`;
+  renderDailyProgress();
 }
 
 function bindStaticEvents() {
   el("back-to-language").addEventListener("click", () => showScreen("language"));
   el("back-to-modes").addEventListener("click", () => showScreen("mode"));
-  el("quit-quiz").addEventListener("click", () => showScreen("mode"));
+  el("quit-quiz").addEventListener("click", () => {
+    stopQuizMedia();
+    showScreen("mode");
+  });
+
+  el("daily-goal-input").addEventListener("change", (e) => setDailyGoal(e.target.value));
+
+  el("listen-play-btn").addEventListener("click", () => {
+    const entry = currentEntry();
+    if (entry) speakChinese(entry.char);
+  });
+  el("listen-slow-btn").addEventListener("click", () => {
+    const entry = currentEntry();
+    if (entry) speakChinese(entry.char, 0.5);
+  });
+  el("listen-sentence-btn").addEventListener("click", () => {
+    const entry = currentEntry();
+    if (entry && entry.sentence) speakChinese(entry.sentence);
+  });
+
+  el("strokes-hint-btn").addEventListener("click", showStrokeOutline);
+  el("strokes-show-btn").addEventListener("click", showStrokeAnimation);
+  el("strokes-next-btn").addEventListener("click", advance);
+  document.querySelectorAll(".st-rate-btn").forEach((btn) => {
+    btn.addEventListener("click", () => answerStrokesSelfRated(btn.dataset.know === "1"));
+  });
 
   document.querySelectorAll(".mode-card").forEach((btn) => {
     btn.addEventListener("click", () => openDayPicker(btn.dataset.mode));
@@ -674,6 +839,14 @@ function startRandomDays() {
 // ---------- mode launch (filters the pool per mode, then starts the quiz) ----------
 
 function launchMode(mode) {
+  if (mode === "listening" && !speechSupported) {
+    alert("This browser can't play speech (no speechSynthesis). Try Chrome or Edge.");
+    return;
+  }
+  if (mode === "strokes" && typeof window.HanziWriter === "undefined") {
+    alert("The stroke-order library didn't load (it comes from cdn.jsdelivr.net). Check your connection and reload.");
+    return;
+  }
   if (mode === "story") {
     startReviewStory();
   } else if (mode === "compose") {
@@ -886,6 +1059,9 @@ function renderQuestion() {
   el("typing-area").classList.add("hidden");
   el("writing-area").classList.add("hidden");
   el("dragdrop-area").classList.add("hidden");
+  el("listening-area").classList.add("hidden");
+  el("strokes-area").classList.add("hidden");
+  stopQuizMedia();
   setSubprompt(null);
 
   // Timestamp used to measure how long the learner takes to answer (used by the
@@ -946,6 +1122,10 @@ function renderQuestion() {
     renderConfusableContext(entry);
   } else if (state.mode === "sentence") {
     renderSentenceBuilder(entry);
+  } else if (state.mode === "listening") {
+    renderListening(entry);
+  } else if (state.mode === "strokes") {
+    renderStrokes(entry);
   }
 }
 
@@ -1268,28 +1448,37 @@ async function generateReviewStory() {
   const btn = el("generate-story-btn");
   const textEl = el("story-text");
 
-  if (!state.entries.length) {
-    textEl.textContent = "No words to build a story from yet — add some characters first.";
+  const freestyle = el("story-word-source").value === "freestyle";
+
+  if (!freestyle && !state.entries.length) {
+    textEl.textContent = "No words to build a story from yet — add some characters first, or switch Words to Freestyle.";
     return;
   }
 
   const hskLevel = Number(el("story-hsk").value) || 3;
   const length = Number(el("story-length").value) || 5;
-  const words = pickStoryWords(length);
+  const words = freestyle ? [] : pickStoryWords(length);
   const format = el("story-format").value === "conversation" ? "conversation" : "story";
+  const wordSource = freestyle ? "freestyle" : "vocab";
 
   textEl.textContent = format === "conversation" ? "Generating your conversation..." : "Generating your story...";
   el("speak-story-btn").disabled = true;
   btn.disabled = true;
 
   try {
-    const data = await callBridge("/api/generate-review-story", { words, hskLevel, length, format });
+    const data = await callBridge("/api/generate-review-story", { words, hskLevel, length, format, wordSource });
     renderReviewStory(data.story);
-    const used = words.filter((w) => data.story.includes(w.char));
-    const skippedFocus = words.filter((w) => w.focus && !data.story.includes(w.char));
-    el("story-word-count").textContent =
-      `Used ${used.length} of ${words.length} picked words` +
-      (skippedFocus.length ? ` · new words it skipped: ${skippedFocus.map((w) => w.char).join(" ")}` : "");
+    if (freestyle) {
+      // Count distinct learned words that happen to show up in the text.
+      const known = new Set(state.entries.map((e) => e.char).filter((c) => c && data.story.includes(c)));
+      el("story-word-count").textContent = `Freestyle · ${known.size} of your learned words appear (in blue)`;
+    } else {
+      const used = words.filter((w) => data.story.includes(w.char));
+      const skippedFocus = words.filter((w) => w.focus && !data.story.includes(w.char));
+      el("story-word-count").textContent =
+        `Used ${used.length} of ${words.length} picked words` +
+        (skippedFocus.length ? ` · new words it skipped: ${skippedFocus.map((w) => w.char).join(" ")}` : "");
+    }
   } catch (err) {
     textEl.textContent = `Couldn't generate a story: ${err.message}`;
   } finally {
@@ -2363,12 +2552,14 @@ function buildOptions(entry, field, preferredPool) {
   return shuffle([entry[field], ...distractors]);
 }
 
-function renderMultipleChoice(entry, field, preferredPool) {
+// `presetOptions` (optional) skips buildOptions, for modes with their own
+// distractor rules (listening).
+function renderMultipleChoice(entry, field, preferredPool, presetOptions) {
   const container = el("mc-area");
   container.classList.remove("hidden");
   container.innerHTML = "";
 
-  const options = buildOptions(entry, field, preferredPool);
+  const options = presetOptions || buildOptions(entry, field, preferredPool);
 
   options.forEach((opt) => {
     const btn = document.createElement("button");
@@ -2389,6 +2580,12 @@ function choose(btn, chosen, correct, entry) {
   recordResult(state.currentLanguage.id, entry.char, known);
   if (known) state.correctCount++;
   else state.missed.push(entry);
+  if (state.mode === "listening") {
+    // Show what was said so a miss teaches the sound, and leave a bit longer to read it.
+    setSubprompt(`${escapeHtml(entry.char)} · ${escapeHtml(entry.pinyin)}`);
+    setTimeout(advance, 1400);
+    return;
+  }
   setTimeout(advance, 700);
 }
 
@@ -2687,6 +2884,243 @@ function checkSentenceOrder() {
   // just track this run's score like the other AI-generated-content modes.
   if (known) state.correctCount++;
   else state.missed.push(entry);
+  logActivity();
+}
+
+// ---------- listening ----------
+
+// Speaks one word or sentence with the browser's Mandarin voice, cutting off
+// anything still playing.
+function speakChinese(text, rate = 0.85) {
+  if (!speechSupported || !text) return;
+  window.speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = "zh-CN";
+  const voice = pickChineseVoice();
+  if (voice) utter.voice = voice;
+  utter.rate = rate;
+  window.speechSynthesis.speak(utter);
+}
+
+// Stops audio and any stroke quiz when a question changes or the quiz is quit.
+function stopQuizMedia() {
+  if (speechSupported) window.speechSynthesis.cancel();
+  if (strokeWriter) {
+    try {
+      strokeWriter.cancelQuiz();
+    } catch {
+      // writer may not have finished loading; nothing to cancel
+    }
+  }
+  strokeWriter = null;
+  strokeRun = null;
+}
+
+// Choices for the listening quiz. A distractor must never sound exactly like
+// the answer (是/事 are both shì, so audio alone can't tell them apart), but
+// words with the same syllables and a different tone make the best traps.
+function buildListeningOptions(entry) {
+  const len = charLength(entry.char);
+  const sound = normalizePinyinStrict(entry.pinyin);
+  const toneless = normalizePinyin(entry.pinyin);
+  const used = new Set([entry.char]);
+  const distractors = [];
+  const add = (cand) => {
+    if (distractors.length >= 3 || !cand || !cand.char || !cand.pinyin) return;
+    if (used.has(cand.char) || normalizePinyinStrict(cand.pinyin) === sound) return;
+    used.add(cand.char);
+    distractors.push(cand.char);
+  };
+  const sameLength = state.entries.filter((e) => charLength(e.char) === len);
+
+  shuffle(sameLength.filter((e) => normalizePinyin(e.pinyin) === toneless)).forEach(add); // tone traps
+  shuffle(swappedWords(entry, true)).forEach(add); // multi-char: one syllable differs only by tone
+  shuffle(sameLength).forEach(add);
+  shuffle(swappedWords(entry, false)).forEach(add);
+  shuffle(state.entries).forEach(add);
+
+  return shuffle([entry.char, ...distractors]);
+}
+
+function renderListening(entry) {
+  el("quiz-prompt").className = "prompt listening-prompt";
+  el("quiz-prompt").textContent = "🎧";
+  el("listening-area").classList.remove("hidden");
+  el("listen-sentence-btn").classList.toggle("hidden", !entry.sentence);
+  // Voices load asynchronously, so only warn once the list is known and has no Chinese voice.
+  const voices = window.speechSynthesis.getVoices();
+  if (voices.length && !pickChineseVoice()) {
+    setSubprompt("No Chinese voice is installed in this browser, so playback may sound wrong.");
+  }
+  renderMultipleChoice(entry, "char", null, buildListeningOptions(entry));
+  speakChinese(entry.char);
+}
+
+// ---------- stroke order (Hanzi Writer) ----------
+
+// A character still counts as "known" with up to this many wrong strokes.
+const STROKE_MISTAKES_ALLOWED = 2;
+
+let strokeWriter = null; // the HanziWriter instance for the current question
+let strokeRun = null; // { entry, chars, idx, mistakes, hintUsed, shown, fallback }
+
+function renderStrokes(entry) {
+  el("quiz-prompt").className = "prompt pinyin-prompt";
+  el("quiz-prompt").textContent = entry.pinyin;
+  el("strokes-area").classList.remove("hidden");
+  el("strokes-done").textContent = "";
+  setStrokeStatus("");
+  el("strokes-controls").classList.remove("hidden");
+  el("strokes-hint-btn").classList.remove("hidden");
+  el("strokes-hint-btn").disabled = false;
+  el("strokes-show-btn").disabled = false;
+  el("strokes-show-btn").textContent = "▶ Show me";
+  el("strokes-rate").classList.add("hidden");
+  el("strokes-next-btn").classList.add("hidden");
+
+  // Swap in a fresh element so no pointer listeners from the last writer linger.
+  const old = el("strokes-target");
+  const target = old.cloneNode(false);
+  old.replaceWith(target);
+
+  const chars = [...entry.char].filter((c) => /\p{Script=Han}/u.test(c));
+  if (typeof window.HanziWriter === "undefined" || !chars.length) {
+    startStrokesFallback(entry, "Stroke checking isn't available for this word. Write it on paper instead.");
+    return;
+  }
+
+  const run = { entry, chars, idx: 0, mistakes: 0, hintUsed: false, shown: false, fallback: false };
+  strokeRun = run;
+  const size = Math.max(180, Math.min(280, el("quiz-card").clientWidth - 48));
+  target.style.width = `${size}px`;
+  target.style.height = `${size}px`;
+  strokeWriter = window.HanziWriter.create(target, chars[0], {
+    width: size,
+    height: size,
+    padding: 12,
+    showCharacter: false,
+    showOutline: false,
+    strokeColor: "#f1f3f9",
+    outlineColor: "#3a4170",
+    drawingColor: "#6c8cff",
+    highlightColor: "#3ecf8e",
+    drawingWidth: 6,
+    showHintAfterMisses: 3,
+    onLoadCharDataError: () => {
+      if (strokeRun !== run) return;
+      target.innerHTML = "";
+      startStrokesFallback(entry, "No stroke data for this character (or you're offline). Write it on paper instead.");
+    },
+  });
+  startStrokeQuiz(run);
+}
+
+function setStrokeStatus(text, tone) {
+  const status = el("strokes-status");
+  status.textContent = text;
+  status.className = "strokes-status" + (tone ? ` ${tone}` : "");
+}
+
+function updateStrokeProgress(run) {
+  const part = run.chars.length > 1 ? `Character ${run.idx + 1} of ${run.chars.length} · ` : "";
+  setStrokeStatus(`${part}${run.mistakes} wrong stroke${run.mistakes === 1 ? "" : "s"}`);
+}
+
+function startStrokeQuiz(run) {
+  updateStrokeProgress(run);
+  strokeWriter.quiz({
+    onMistake: () => {
+      if (strokeRun !== run) return;
+      run.mistakes++;
+      updateStrokeProgress(run);
+    },
+    onComplete: () => {
+      if (strokeRun === run) finishStrokeChar(run);
+    },
+  });
+}
+
+function finishStrokeChar(run) {
+  el("strokes-done").textContent += run.chars[run.idx];
+  run.idx++;
+  if (run.idx < run.chars.length) {
+    // Short pause so the finished character is visible before the next one.
+    setTimeout(() => {
+      if (strokeRun !== run || !strokeWriter) return;
+      strokeWriter.hideOutline();
+      strokeWriter.setCharacter(run.chars[run.idx]);
+      el("strokes-hint-btn").disabled = false;
+      startStrokeQuiz(run);
+    }, 600);
+    return;
+  }
+
+  const allowed = STROKE_MISTAKES_ALLOWED * run.chars.length;
+  const known = !run.hintUsed && !run.shown && run.mistakes <= allowed;
+  let message;
+  if (known) message = run.mistakes ? `Correct, with ${run.mistakes} wrong stroke${run.mistakes === 1 ? "" : "s"}.` : "Perfect!";
+  else if (run.shown) message = "Counted as a miss because you watched the animation.";
+  else if (run.hintUsed) message = "Counted as a miss because you used the outline.";
+  else message = `Counted as a miss: ${run.mistakes} wrong strokes.`;
+  setStrokeStatus(message, known ? "correct" : "incorrect");
+  el("strokes-controls").classList.add("hidden");
+  el("strokes-next-btn").classList.remove("hidden");
+
+  recordResult(state.currentLanguage.id, run.entry.char, known);
+  if (known) state.correctCount++;
+  else state.missed.push(run.entry);
+}
+
+function showStrokeOutline() {
+  const run = strokeRun;
+  if (!run || run.fallback || !strokeWriter) return;
+  run.hintUsed = true;
+  strokeWriter.showOutline();
+  el("strokes-hint-btn").disabled = true;
+}
+
+// "Show me": plays the stroke-order animation, then lets you write it again.
+// In fallback mode (no stroke data) the same button reveals the answer.
+function showStrokeAnimation() {
+  const run = strokeRun;
+  if (!run) return;
+  if (run.fallback) {
+    el("strokes-done").textContent = run.entry.char;
+    el("strokes-controls").classList.add("hidden");
+    el("strokes-rate").classList.remove("hidden");
+    return;
+  }
+  if (!strokeWriter) return;
+  run.shown = true;
+  el("strokes-show-btn").disabled = true;
+  strokeWriter.cancelQuiz();
+  strokeWriter.animateCharacter({
+    onComplete: () => {
+      if (strokeRun !== run || !strokeWriter) return;
+      el("strokes-show-btn").disabled = false;
+      strokeWriter.hideCharacter();
+      startStrokeQuiz(run);
+    },
+  });
+}
+
+// Without stroke data: write it on paper, reveal, then self-rate (like Writing Practice).
+function startStrokesFallback(entry, message) {
+  strokeWriter = null;
+  strokeRun = { entry, fallback: true };
+  setStrokeStatus(message);
+  el("strokes-hint-btn").classList.add("hidden");
+  el("strokes-show-btn").disabled = false;
+  el("strokes-show-btn").textContent = "Show answer";
+  el("strokes-controls").classList.remove("hidden");
+}
+
+function answerStrokesSelfRated(known) {
+  const entry = currentEntry();
+  recordResult(state.currentLanguage.id, entry.char, known);
+  if (known) state.correctCount++;
+  else state.missed.push(entry);
+  advance();
 }
 
 // ---------- typing ----------
