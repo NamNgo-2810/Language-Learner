@@ -744,6 +744,7 @@ function bindStaticEvents() {
   bindPinyinLookup(el("story-text"), ".story-char");
   bindPinyinLookup(el("compose-feedback"), ".story-char");
   bindPinyinLookup(el("dragdrop-area"), ".dnd-chip");
+  bindPinyinLookup(el("quiz-subprompt"), ".story-char");
   bindGlobalPinyinPopupDismiss();
 }
 
@@ -3022,21 +3023,14 @@ function renderStrokes(entry) {
 // get a generated sentence from the local bridge (cached on the entry).
 function renderStrokesContext(entry) {
   const token = ++currentQuestionToken;
+  // Hán Việt comes only from the sheet (column I); nothing is generated here.
   const hanViet = el("strokes-hanviet");
-  hanViet.classList.add("hidden");
-  hanViet.textContent = "";
-  const showHanViet = () => {
-    if (token !== currentQuestionToken || !entry.hanViet || !isHanVietEnabled()) return;
-    hanViet.textContent = `Hán Việt: ${entry.hanViet}`;
-    hanViet.classList.remove("hidden");
-  };
-  if (isHanVietEnabled()) {
-    if (entry.hanViet) showHanViet();
-    else ensureHanViet(entry).then(showHanViet, () => {});
-  }
+  const showHanViet = Boolean(entry.hanViet) && isHanVietEnabled();
+  hanViet.textContent = showHanViet ? `Hán Việt: ${entry.hanViet}` : "";
+  hanViet.classList.toggle("hidden", !showHanViet);
 
   if (entry.sentence && entry.sentence.includes(entry.char)) {
-    setSubprompt(sentenceBlankHTML(entry));
+    setSubprompt(blankedContextHTML(entry.sentence, entry.char));
     return;
   }
   if (entry.strokeContext) {
@@ -3049,7 +3043,7 @@ function renderStrokesContext(entry) {
       const sentence = String(data.sentence || "");
       let html = null;
       if (sentence.includes(entry.char)) {
-        html = sentence.split(entry.char).map(escapeHtml).join('<span class="blank">___</span>');
+        html = blankedContextHTML(sentence, entry.char);
       } else if (data.pinyinContext) {
         html = escapeHtml(String(data.pinyinContext)).replace(/＿/g, '<span class="blank">___</span>');
       }
@@ -3061,6 +3055,16 @@ function renderStrokesContext(entry) {
         setSubprompt('<span class="subtle-inline">No context sentence (local bridge not running). Add an example sentence to this word for context.</span>');
       }
     });
+}
+
+// A sentence with `word` blanked out, where every other Chinese character is
+// its own span so right-click / long-press shows its pinyin.
+function blankedContextHTML(sentence, word) {
+  const spans = (text) =>
+    [...text]
+      .map((ch) => (/\p{Script=Han}/u.test(ch) ? `<span class="story-char">${escapeHtml(ch)}</span>` : escapeHtml(ch)))
+      .join("");
+  return sentence.split(word).map(spans).join('<span class="blank">___</span>');
 }
 
 function setStrokeStatus(text, tone) {
