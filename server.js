@@ -398,7 +398,7 @@ function serveStatic(req, res) {
   });
 }
 
-const server = http.createServer((req, res) => {
+function handleRequest(req, res) {
   if (!isAuthorized(req)) {
     res.writeHead(401, { "WWW-Authenticate": 'Basic realm="Learn Languages"' });
     return res.end("Authentication required");
@@ -416,7 +416,11 @@ const server = http.createServer((req, res) => {
   if (req.method === "GET") return serveStatic(req, res);
   res.writeHead(405);
   res.end("method not allowed");
-});
+}
+
+// On Vercel this module is loaded by api/index.js, which hands each request to
+// handleRequest; there is no long-running server to start.
+module.exports = handleRequest;
 
 if (!process.env.APP_USERNAME || !process.env.APP_PASSWORD) {
   console.warn(
@@ -432,7 +436,9 @@ if (!sheets.isConfigured()) {
   );
 }
 
-const PORT = process.env.PORT || 8080;
-server.listen(PORT, () => {
-  console.log(`Learn Languages running at http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  const PORT = process.env.PORT || 8080;
+  http.createServer(handleRequest).listen(PORT, () => {
+    console.log(`Learn Languages running at http://localhost:${PORT}`);
+  });
+}
