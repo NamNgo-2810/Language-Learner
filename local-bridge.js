@@ -5,13 +5,9 @@
 //
 // No npm dependencies — copy this one file to any machine with Node 18+ and
 // Claude Code installed. Run it with:
-//   PowerShell:  $env:BRIDGE_ALLOWED_ORIGINS="https://your-app.onrender.com"; node local-bridge.js
-//   bash/zsh:    BRIDGE_ALLOWED_ORIGINS=https://your-app.onrender.com node local-bridge.js
+//   node local-bridge.js
 //
-// Environment variables (all optional except the origin list):
-//   BRIDGE_ALLOWED_ORIGINS  comma-separated origins allowed to call the bridge,
-//                           e.g. "https://your-app.onrender.com,http://localhost:8080".
-//                           "*" allows any website (testing only, see warning below).
+// Environment variables (all optional):
 //   BRIDGE_PORT             default 8421
 //   CLAUDE_BIN              path to the claude executable, default "claude"
 //   BRIDGE_MODEL_FAST       short generation tasks and grading, default "haiku"
@@ -23,14 +19,12 @@
 //   /api/generate-sentence  /api/generate-practice-sentence  /api/generate-confusable-context
 //   /api/hanviet  /api/chietu  /api/word-info  /api/grammar-batch
 //   /api/generate-review-story  /api/compose-task  /api/compose-feedback
-//   GET /api/health — quick check that the bridge is up and the origin is allowed.
+//   GET /api/health — quick check that the bridge is up.
 //
 // Security model:
 //   - Listens on 127.0.0.1 only, so nothing on your network can reach it.
-//   - Only requests whose Origin header is in BRIDGE_ALLOWED_ORIGINS are run.
-//     Browsers always send Origin on cross-site requests and pages can't forge it.
-//   - POSTs must be Content-Type: application/json, which forces a CORS
-//     preflight, so a disallowed site can't fire "simple" requests at it blind.
+//   - Requests from any origin are accepted (CORS allows "*"), so any website
+//     open in your browser can call the bridge and run Claude on your account.
 //   - Every instruction lives in this file. A caller can only pick one of the
 //     tasks above and fill in its fields, never send its own prompt.
 //   - claude is started without a shell, and request data reaches it only over
@@ -55,31 +49,12 @@ const MAX_QUEUE = 30;
 const MAX_BODY_BYTES = 200 * 1024;
 const DEFAULT_TIMEOUT_MS = 120000;
 
-const ALLOWED_ORIGINS = String(process.env.BRIDGE_ALLOWED_ORIGINS || "")
-  .split(",")
-  .map((s) => s.trim().replace(/\/+$/, ""))
-  .filter(Boolean);
-const ALLOW_ANY_ORIGIN = ALLOWED_ORIGINS.includes("*");
-
-if (!ALLOWED_ORIGINS.length) {
-  console.error(
-    "BRIDGE_ALLOWED_ORIGINS is not set. Set it to your deployed app's origin, e.g.\n" +
-      '  $env:BRIDGE_ALLOWED_ORIGINS="https://your-app.onrender.com"; node local-bridge.js'
-  );
-  process.exit(1);
-}
 if (/\.(cmd|bat|ps1)$/i.test(CLAUDE_BIN)) {
   console.error(
     `CLAUDE_BIN points to a script shim (${CLAUDE_BIN}). The bridge only starts real executables, without a shell.\n` +
       "Install the native Claude Code build (claude.exe) and point CLAUDE_BIN at it, or leave CLAUDE_BIN unset."
   );
   process.exit(1);
-}
-if (ALLOW_ANY_ORIGIN) {
-  console.warn(
-    'WARNING: BRIDGE_ALLOWED_ORIGINS="*" — any website you visit can make this bridge run Claude on your ' +
-      "account and read the reply. Use it for quick testing only."
-  );
 }
 
 // ---------- input helpers ----------
@@ -860,23 +835,14 @@ function releaseSlot() {
 
 // ---------- HTTP ----------
 
-function originAllowed(origin) {
-  if (!origin) return false;
-  if (ALLOW_ANY_ORIGIN) return true;
-  return ALLOWED_ORIGINS.includes(origin.replace(/\/+$/, ""));
-}
-
-function corsHeaders(origin) {
-  return {
-    "Access-Control-Allow-Origin": ALLOW_ANY_ORIGIN ? "*" : origin,
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-    // Older Chromium Private Network Access preflights look for this header.
-    "Access-Control-Allow-Private-Network": "true",
-    "Access-Control-Max-Age": "600",
-    Vary: "Origin",
-  };
-}
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+  // Older Chromium Private Network Access preflights look for this header.
+  "Access-Control-Allow-Private-Network": "true",
+  "Access-Control-Max-Age": "600",
+};
 
 function sendJSON(res, status, obj, extraHeaders = {}) {
   if (res.headersSent || res.destroyed) return;
@@ -891,17 +857,11 @@ function sendJSON(res, status, obj, extraHeaders = {}) {
 }
 
 const server = http.createServer((req, res) => {
-  const origin = req.headers.origin || "";
   const { pathname } = new URL(req.url, `http://${HOST}`);
   const handler = ROUTES[pathname];
+  const cors = CORS_HEADERS;
 
-  if (!handler && pathname !== "/api/health") return sendJSON(res, 404, { error: "not found" });
-
-  if (!originAllowed(origin)) {
-    console.warn(`rejected ${req.method} ${pathname} from origin "${origin || "(none)"}"`);
-    return sendJSON(res, 403, { error: "origin not allowed" });
-  }
-  const cors = corsHeaders(origin);
+  if (!handler && pathname !== "/api/health") return sendJSON(res, 404, { error: "not found" }, cors);
 
   if (req.method === "OPTIONS") {
     res.writeHead(204, cors);
@@ -979,6 +939,5 @@ server.on("error", (err) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`local-bridge listening on http://localhost:${PORT}`);
-  console.log(`allowed origins: ${ALLOWED_ORIGINS.join(", ")}`);
   console.log(`models: fast=${MODELS.fast}, story=${MODELS.story}, word info=${MODELS.wordInfo}`);
 });

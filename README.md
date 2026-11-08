@@ -71,16 +71,11 @@ Features that use it: **✨ Generate** sentence, the Hán Việt / chiết tự 
 
 **Run it** (needs Node 18+ and Claude Code installed and logged in — check with `claude -p "hi"`):
 
-```powershell
-# PowerShell
-$env:BRIDGE_ALLOWED_ORIGINS="https://your-app.onrender.com"; npm run bridge
-```
 ```bash
-# macOS / Linux
-BRIDGE_ALLOWED_ORIGINS=https://your-app.onrender.com npm run bridge
+npm run bridge
 ```
 
-`BRIDGE_ALLOWED_ORIGINS` is the exact address of your deployed app (scheme + host, no trailing slash); add `,http://localhost:8080` to also use it with a local `npm start`. The bridge has no npm dependencies, so on another machine you can copy just `local-bridge.js` and run `node local-bridge.js`.
+The bridge accepts requests from any origin, so it works with the deployed app and a local `npm start` alike — but any other website open in your browser could call it too, so only run it while you're using the app. The bridge has no npm dependencies, so on another machine you can copy just `local-bridge.js` and run `node local-bridge.js`.
 
 The first time the deployed site calls it, Chrome/Edge ask to let the site **access other apps and services on this device** — click **Allow**. Safari blocks these calls, so use Chrome, Edge or Firefox.
 
