@@ -68,6 +68,11 @@
         <span class="mode-name">Listening</span>
         <span class="mode-desc">Hear the word, pick the character (wrong options differ by tone or sound)</span>
       </button>
+      <button class="mode-card" data-mode="dictation" id="mode-dictation">
+        <span class="mode-icon">🎙️</span>
+        <span class="mode-name">Chép chính tả</span>
+        <span class="mode-desc">AI writes a paragraph from your vocab; listen sentence by sentence and type what you hear</span>
+      </button>
       <button class="mode-card" data-mode="writing">
         <span class="mode-icon">✍️</span>
         <span class="mode-name">Writing Practice</span>
@@ -228,6 +233,19 @@
         <input type="text" id="typing-input" autocomplete="off" placeholder="type the pinyin, e.g. ni3 or nǐ">
         <button id="typing-submit" class="primary-btn">Check</button>
         <div id="typing-feedback"></div>
+      </div>
+
+      <!-- dictation mode (Chép chính tả): hear the word, type the characters -->
+      <div id="dictation-area" class="hidden">
+        <div class="listening-controls">
+          <button id="dict-play-btn" class="primary-btn" type="button">🔊 Play again</button>
+          <button id="dict-slow-btn" class="secondary-btn" type="button">🐢 Slower</button>
+          <button id="dict-hint-btn" class="secondary-btn" type="button">💡 Pinyin hint</button>
+        </div>
+        <input type="text" id="dict-input" lang="zh-CN" autocomplete="off" placeholder="输入你听到的句子">
+        <button id="dict-submit" class="primary-btn" type="button">Check</button>
+        <div id="dict-feedback"></div>
+        <button id="dict-next-btn" class="primary-btn hidden" type="button">Next →</button>
       </div>
 
       <!-- writing practice mode -->

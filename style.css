@@ -168,6 +168,17 @@ h2 { font-size: 1.15rem; margin: 0 0 4px; }
   font-size: 1.1rem;
   text-align: center;
 }
+#dictation-area { display: flex; flex-direction: column; gap: 12px; align-items: center; }
+#dict-input {
+  font-size: 1.3rem;
+  width: 100%;
+  max-width: 560px;
+  padding: 10px 12px;
+  text-align: center;
+}
+#dict-feedback { line-height: 1.6; text-align: center; font-size: 1rem; min-height: 1.4rem; }
+#dict-feedback.correct { color: var(--good); }
+#dict-feedback.incorrect { color: var(--bad); }
 #typing-feedback { font-size: 1rem; min-height: 1.4rem; }
 #typing-feedback.correct { color: var(--good); }
 #typing-feedback.incorrect { color: var(--bad); }
