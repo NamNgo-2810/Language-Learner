@@ -591,6 +591,8 @@ async function generateReviewStory(data, signal) {
   const hskLevel = clampInt(data.hskLevel, 1, 6, 3);
   const length = clampInt(data.length, 1, 20, 5);
   const format = data.format === "conversation" ? "conversation" : "story";
+  // Dictation: one plain paragraph built only from the learner's own words.
+  const vocabOnly = !freestyle && data.vocabOnly === true;
 
   const listOf = (ws) => shuffle(ws).map((w) => `${w.char} (${w.pinyin})`).join(", ");
   const focus = words.filter((w) => w.focus);
@@ -602,6 +604,7 @@ async function generateReviewStory(data, signal) {
     `What happens: ${scenario.situation}.`,
     `Tone: ${scenario.tone}.`,
   ];
+  if (vocabOnly && !focus.length) lines.push("Focus words: none; just use as many review words as fit.");
   if (focus.length) lines.push(`Focus words (just learned — use every one of these): ${listOf(focus)}`);
   if (others.length) lines.push(`Review words (use as many as fit naturally): ${listOf(others)}`);
 
@@ -622,8 +625,13 @@ async function generateReviewStory(data, signal) {
         : `You write a short story in Mandarin Chinese at approximately HSK level ${hskLevel} (on the 1-6 scale, where 1 is absolute beginner and 6 is advanced) — keep the vocabulary and grammar at or below that level. ` +
           `Aim for about ${length} sentence${length === 1 ? "" : "s"}. `) +
       "Build it on the setting, character, situation and tone given in the request — follow that scenario rather than substituting a premise of your own, and give it concrete, specific details. " +
+      (vocabOnly
+        ? "STRICT VOCABULARY RULE: build the text only from the words in the focus and review lists. Besides those, you may use only punctuation, numerals, personal pronouns, and the most basic function words (的, 了, 是, 不, 在, 和, 也, 都, 很, 吗, 呢, 吧). Do not use any other content word that is not on the lists. Use every focus word, and as many review words as fit naturally. Write one continuous paragraph with no line breaks, no speaker labels and no title. "
+        : "") +
       (freestyle
         ? "Choose whatever vocabulary suits the scenario and level; use natural, everyday words a learner at that level would meet. "
+        : vocabOnly
+        ? ""
         : "Use every focus word (they're the words the learner just learned); for the review words, weave in as many as fit comfortably at that level. You may freely use other words the text needs, but never force an awkward line just to include a word. ") +
       "Reply with the Chinese characters only — no pinyin, no translation, no extra commentary.",
     user: lines.join("\n"),

@@ -352,7 +352,7 @@ function setFlagged(char, flagged) {
 // (see launchMode), so there's nothing meaningful to flag there — hide the button.
 function updateFlagButton(entry) {
   const btn = el("flag-word-btn");
-  if (state.mode === "sentence" || !entry || !entry.char) {
+  if (state.mode === "sentence" || state.mode === "dictation" || !entry || !entry.char) {
     btn.classList.add("hidden");
     return;
   }
@@ -606,6 +606,22 @@ function bindStaticEvents() {
     if (entry && entry.sentence) speakChinese(entry.sentence);
   });
 
+  el("dict-play-btn").addEventListener("click", () => {
+    const entry = currentEntry();
+    if (entry) speakChinese(entry.char);
+  });
+  el("dict-slow-btn").addEventListener("click", () => {
+    const entry = currentEntry();
+    if (entry) speakChinese(entry.char, 0.5);
+  });
+  el("dict-hint-btn").addEventListener("click", showDictationHint);
+  el("dict-next-btn").addEventListener("click", advance);
+  el("dict-submit").addEventListener("click", submitDictation);
+  el("dict-input").addEventListener("keydown", (e) => {
+    // Enter also confirms an IME candidate; only submit when not composing.
+    if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) submitDictation();
+  });
+
   el("strokes-hint-btn").addEventListener("click", showStrokeOutline);
   el("strokes-show-btn").addEventListener("click", showStrokeAnimation);
   el("strokes-next-btn").addEventListener("click", advance);
@@ -695,7 +711,8 @@ function bindStaticEvents() {
 
   el("retry-missed").addEventListener("click", () => {
     const missed = state.missed.map((e) => e);
-    beginQuiz(state.mode, missed, { skipCap: true });
+    if (state.mode === "dictation") beginDictationQueue(missed);
+    else beginQuiz(state.mode, missed, { skipCap: true });
   });
 
   el("go-to-add").addEventListener("click", () => {
@@ -840,7 +857,7 @@ function startRandomDays() {
 // ---------- mode launch (filters the pool per mode, then starts the quiz) ----------
 
 function launchMode(mode) {
-  if (mode === "listening" && !speechSupported) {
+  if ((mode === "listening" || mode === "dictation") && !speechSupported) {
     alert("This browser can't play speech (no speechSynthesis). Try Chrome or Edge.");
     return;
   }
@@ -848,7 +865,9 @@ function launchMode(mode) {
     alert("The stroke-order library didn't load (it comes from cdn.jsdelivr.net). Check your connection and reload.");
     return;
   }
-  if (mode === "story") {
+  if (mode === "dictation") {
+    startDictation();
+  } else if (mode === "story") {
     startReviewStory();
   } else if (mode === "compose") {
     startCompose();
@@ -1061,6 +1080,7 @@ function renderQuestion() {
   el("writing-area").classList.add("hidden");
   el("dragdrop-area").classList.add("hidden");
   el("listening-area").classList.add("hidden");
+  el("dictation-area").classList.add("hidden");
   el("strokes-area").classList.add("hidden");
   stopQuizMedia();
   setSubprompt(null);
@@ -1125,6 +1145,8 @@ function renderQuestion() {
     renderSentenceBuilder(entry);
   } else if (state.mode === "listening") {
     renderListening(entry);
+  } else if (state.mode === "dictation") {
+    renderDictation(entry);
   } else if (state.mode === "strokes") {
     renderStrokes(entry);
   }
@@ -2957,6 +2979,133 @@ function renderListening(entry) {
   speakChinese(entry.char);
 }
 
+// ---------- dictation (Chép chính tả) ----------
+
+// Hear the word, type the characters. Whitespace and punctuation are ignored
+// when comparing.
+function stripForDictation(str) {
+  return String(str || "").replace(/[\s\p{P}\p{S}]/gu, "").normalize("NFC");
+}
+
+const DICTATION_SENTENCES = 6;
+const DICTATION_HSK = 3;
+
+// Generates one paragraph from the learner's own vocab (via the local bridge),
+// splits it into sentences, and runs them as the quiz queue, in order.
+async function startDictation() {
+  if (!activePool().length) {
+    alert("No words to build a paragraph from yet. Add some characters first.");
+    return;
+  }
+  const token = ++currentQuestionToken;
+  state.mode = "dictation";
+  showScreen("quiz");
+  ["flashcard", "mc", "typing", "writing", "dragdrop", "listening", "dictation", "strokes"].forEach((p) =>
+    el(`${p}-area`).classList.add("hidden")
+  );
+  stopQuizMedia();
+  el("progress-fill").style.width = "0%";
+  el("progress-label").textContent = "";
+  el("flag-word-btn").classList.add("hidden");
+  el("quiz-prompt").className = "prompt listening-prompt";
+  el("quiz-prompt").textContent = "🎙️";
+  setSubprompt("Writing a paragraph from your vocab…");
+
+  const pool = activePool();
+  const focusSet = new Set(shuffle(dayAwareRecentEntries(pool)).slice(0, STORY_FOCUS_MAX));
+  const words = pool.map((e) => ({ char: e.char, pinyin: e.pinyin, focus: focusSet.has(e) }));
+  try {
+    const data = await callBridge("/api/generate-review-story", {
+      words,
+      hskLevel: DICTATION_HSK,
+      length: DICTATION_SENTENCES,
+      format: "story",
+      wordSource: "vocab",
+      vocabOnly: true,
+    });
+    if (token !== currentQuestionToken || el("screen-quiz").classList.contains("hidden")) return;
+    const paragraph = String(data.story || "").replace(/\s+/g, "");
+    const lines = splitStoryLines(paragraph).filter((s) => stripForDictation(s));
+    if (!lines.length) throw new Error("empty paragraph");
+    state.dictationText = paragraph;
+    const chunks = lines.map((text, id) => ({
+      id,
+      char: text,
+      pinyin: "",
+      words: pool.filter((e) => e.char && text.includes(e.char)).map((e) => e.char),
+    }));
+    beginDictationQueue(chunks);
+  } catch (err) {
+    if (token !== currentQuestionToken) return;
+    setSubprompt(`Couldn't generate a paragraph: ${escapeHtml(err.message)}`);
+  }
+}
+
+function beginDictationQueue(chunks) {
+  state.mode = "dictation";
+  state.queue = chunks;
+  state.index = 0;
+  state.requeued = new Set();
+  state.missed = [];
+  state.correctCount = 0;
+  showScreen("quiz");
+  renderQuestion();
+}
+
+async function showDictationHint() {
+  const entry = currentEntry();
+  if (!entry) return;
+  if (!entry.pinyin) entry.pinyin = await expectedPinyinFor(entry.char);
+  if (entry === currentEntry() && entry.pinyin) setSubprompt(escapeHtml(entry.pinyin));
+}
+
+function renderDictation(entry) {
+  el("quiz-prompt").className = "prompt listening-prompt";
+  el("quiz-prompt").textContent = "🎙️";
+  el("dictation-area").classList.remove("hidden");
+  el("dict-next-btn").classList.add("hidden");
+  el("dict-input").value = "";
+  el("dict-input").disabled = false;
+  el("dict-submit").disabled = false;
+  el("dict-feedback").textContent = "";
+  el("dict-feedback").className = "";
+  const voices = window.speechSynthesis.getVoices();
+  if (voices.length && !pickChineseVoice()) {
+    setSubprompt("No Chinese voice is installed in this browser, so playback may sound wrong.");
+  }
+  el("dict-input").focus();
+  speakChinese(entry.char);
+}
+
+function submitDictation() {
+  const input = el("dict-input");
+  if (input.disabled) return;
+  const entry = currentEntry();
+  const typed = stripForDictation(input.value);
+  if (!typed) return;
+  const known = typed === stripForDictation(entry.char);
+  const feedback = el("dict-feedback");
+  feedback.className = known ? "correct" : "incorrect";
+  if (known) {
+    feedback.textContent = "Correct!";
+  } else {
+    feedback.innerHTML = `Answer: ${escapeHtml(entry.char)}<br>You wrote: ${escapeHtml(input.value.trim())}`;
+  }
+  input.disabled = true;
+  el("dict-submit").disabled = true;
+  // Each vocab word in the sentence counts on its own: right if it appears in what was typed.
+  entry.words.forEach((w) => recordResult(state.currentLanguage.id, w, typed.includes(stripForDictation(w))));
+  if (known) state.correctCount++;
+  else state.missed.push(entry);
+  if (known) {
+    setTimeout(advance, 900);
+  } else {
+    const next = el("dict-next-btn");
+    next.classList.remove("hidden");
+    next.focus();
+  }
+}
+
 // ---------- stroke order (Hanzi Writer) ----------
 
 // A character still counts as "known" with up to this many wrong strokes.
@@ -3236,6 +3385,13 @@ function showResults() {
   }
 
   renderRememberingLevels();
+
+  if (state.mode === "dictation" && state.dictationText) {
+    const full = document.createElement("p");
+    full.className = "sentence-hint";
+    full.textContent = state.dictationText;
+    el("results-remembering").prepend(full);
+  }
 }
 
 // Shows a "how well you remember these" bar for each word answered this run,
