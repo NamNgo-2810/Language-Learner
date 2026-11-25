@@ -4,7 +4,7 @@
   "outputDirectory": "public",
   "functions": {
     "api/index.js": {
-      "includeFiles": "{index.html,app.js,style.css,languages.json}"
+      "includeFiles": "{index.html,app.js,style.css,languages.json,logo.svg,xiyouji-pilgrims.svg}"
     }
   },
   "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }]

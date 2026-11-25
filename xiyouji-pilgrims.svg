@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 220" width="800" height="220">
+  <!-- Background for the Mandarin theme: the four pilgrims of Journey to the West walking west,
+       in gold silhouette. Opacity is set in CSS. -->
+  <g fill="#e8b23a" stroke="#e8b23a" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- distant mountains -->
+    <path stroke="none" fill-opacity="0.35"
+          d="M0 200 L70 150 L115 178 L185 112 L250 172 L300 140 L360 190 L430 130 L505 185 L585 118 L650 168 L720 135 L800 180 V220 H0 Z"/>
+
+    <!-- ground -->
+    <path stroke="none" d="M0 204 Q200 192 400 201 T800 197 V220 H0 Z"/>
+
+    <!-- 沙悟净 Sha Wujing: carrying the luggage on a shoulder pole -->
+    <g>
+      <circle cx="200" cy="112" r="9" stroke="none"/>
+      <path stroke="none" d="M190 122 L210 122 L217 172 L183 172 Z"/>
+      <line x1="192" y1="170" x2="184" y2="201" stroke-width="6"/>
+      <line x1="208" y1="170" x2="216" y2="200" stroke-width="6"/>
+      <line x1="158" y1="123" x2="242" y2="123" stroke-width="3"/>
+      <line x1="164" y1="123" x2="164" y2="140" stroke-width="1.5"/>
+      <line x1="236" y1="123" x2="236" y2="140" stroke-width="1.5"/>
+      <path stroke="none" d="M153 140 h22 l-3 19 h-16 z"/>
+      <path stroke="none" d="M225 140 h22 l-3 19 h-16 z"/>
+      <!-- prayer-bead necklace -->
+      <circle cx="194" cy="125" r="2.2" stroke="none"/>
+      <circle cx="200" cy="127" r="2.2" stroke="none"/>
+      <circle cx="206" cy="125" r="2.2" stroke="none"/>
+    </g>
+
+    <!-- 猪八戒 Zhu Bajie: round belly, big ears, rake over the shoulder -->
+    <g>
+      <ellipse cx="340" cy="160" rx="21" ry="24" stroke="none"/>
+      <circle cx="347" cy="124" r="13" stroke="none"/>
+      <ellipse cx="361" cy="128" rx="6.5" ry="5" stroke="none"/>
+      <path stroke="none" d="M337 114 L325 102 L345 109 Z"/>
+      <line x1="332" y1="181" x2="326" y2="201" stroke-width="7"/>
+      <line x1="348" y1="181" x2="356" y2="200" stroke-width="7"/>
+      <line x1="372" y1="142" x2="296" y2="108" stroke-width="3"/>
+      <line x1="288" y1="118" x2="304" y2="97" stroke-width="4"/>
+      <line x1="290" y1="115" x2="283" y2="112" stroke-width="2"/>
+      <line x1="295" y1="109" x2="288" y2="106" stroke-width="2"/>
+      <line x1="300" y1="103" x2="293" y2="100" stroke-width="2"/>
+    </g>
+
+    <!-- 唐三藏 Tang Sanzang on the white dragon horse, holding his ringed staff -->
+    <g>
+      <ellipse cx="480" cy="160" rx="40" ry="16" stroke="none"/>
+      <path stroke="none" d="M506 150 Q520 140 526 118 L538 122 Q532 150 516 164 Z"/>
+      <ellipse cx="539" cy="124" rx="13" ry="7" transform="rotate(28 539 124)" stroke="none"/>
+      <path stroke="none" d="M528 114 L531 104 L535 115 Z"/>
+      <line x1="452" y1="170" x2="446" y2="201" stroke-width="5"/>
+      <line x1="463" y1="172" x2="471" y2="200" stroke-width="5"/>
+      <line x1="500" y1="172" x2="494" y2="200" stroke-width="5"/>
+      <line x1="511" y1="169" x2="521" y2="199" stroke-width="5"/>
+      <path fill="none" stroke-width="5" d="M442 154 Q426 164 432 188"/>
+      <!-- monk -->
+      <path stroke="none" d="M466 146 L494 146 L499 170 L461 170 Z"/>
+      <path stroke="none" d="M469 146 L491 146 L488 112 L472 112 Z"/>
+      <circle cx="480" cy="102" r="8" stroke="none"/>
+      <path stroke="none" d="M471 99 L473 88 L478 94 L480 86 L482 94 L487 88 L489 99 Z"/>
+      <line x1="492" y1="128" x2="507" y2="62" stroke-width="2.5"/>
+      <circle cx="508" cy="56" r="5.5" fill="none" stroke-width="2"/>
+    </g>
+
+    <!-- 孙悟空 Sun Wukong: leading the way, shading his eyes, staff over the shoulder -->
+    <g>
+      <circle cx="640" cy="128" r="9" stroke="none"/>
+      <!-- pheasant-feather plumes on the headband -->
+      <path fill="none" stroke-width="1.8" d="M636 120 Q622 96 598 90"/>
+      <path fill="none" stroke-width="1.8" d="M641 119 Q632 92 612 80"/>
+      <path stroke="none" d="M631 138 L649 138 L653 170 L627 170 Z"/>
+      <line x1="634" y1="168" x2="622" y2="200" stroke-width="5.5"/>
+      <line x1="646" y1="168" x2="658" y2="199" stroke-width="5.5"/>
+      <line x1="647" y1="142" x2="656" y2="128" stroke-width="4"/>
+      <line x1="656" y1="128" x2="648" y2="123" stroke-width="3.5"/>
+      <line x1="596" y1="152" x2="684" y2="128" stroke-width="3.5"/>
+      <path fill="none" stroke-width="3" d="M629 164 Q612 166 610 150 Q609 140 616 138"/>
+    </g>
+  </g>
+</svg>
