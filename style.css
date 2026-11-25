@@ -35,6 +35,20 @@ header {
 
 h1 { font-size: 1.4rem; margin: 0; display: flex; align-items: center; gap: 10px; }
 .logo { width: 36px; height: 36px; flex: none; }
+
+.header-right { display: flex; align-items: center; gap: 12px; }
+.theme-toggle {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 12px;
+  color: var(--subtle);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.theme-toggle:hover { color: var(--text); border-color: var(--accent); }
 h2 { font-size: 1.15rem; margin: 0 0 4px; }
 .subtle { color: var(--subtle); font-size: 0.9rem; margin: 0 0 16px; }
 
@@ -1244,3 +1258,10 @@ body.theme-xiyouji::after {
 @media (min-width: 1100px) {
   body.theme-xiyouji::after { opacity: 0.1; }
 }
+
+.theme-xiyouji .theme-toggle {
+  background: rgba(45, 19, 16, 0.85);
+  border-color: rgba(232, 178, 58, 0.45);
+  color: var(--gold);
+}
+.theme-xiyouji .theme-toggle:hover { border-color: var(--gold); color: var(--gold-light); }

@@ -110,15 +110,36 @@ const screens = {
 // Per-language visual themes, applied to <body> once a language is chosen.
 const LANGUAGE_THEMES = { mandarin: "theme-xiyouji" }; // Journey to the West (西游记)
 
-function applyLanguageTheme(onLanguageScreen) {
-  const active = onLanguageScreen ? null : LANGUAGE_THEMES[state.currentLanguage?.id];
+const THEME_PREF_KEY = "lang-learner-language-theme"; // "1" = themed (default), "0" = normal
+
+function isLanguageThemeEnabled() {
+  return localStorage.getItem(THEME_PREF_KEY) !== "0";
+}
+
+let onLanguageScreen = true;
+
+function applyLanguageTheme() {
+  const themeCls = onLanguageScreen ? null : LANGUAGE_THEMES[state.currentLanguage?.id];
+  const active = themeCls && isLanguageThemeEnabled() ? themeCls : null;
   Object.values(LANGUAGE_THEMES).forEach((cls) => document.body.classList.toggle(cls, cls === active));
+
+  // The switch only shows when the current language has a theme to toggle.
+  const toggle = el("theme-toggle");
+  toggle.classList.toggle("hidden", !themeCls);
+  toggle.textContent = active ? "◐ Normal theme" : "☁ 西游 theme";
+  toggle.title = active ? "Switch back to the normal theme" : "Switch to the Journey to the West theme";
+}
+
+function toggleLanguageTheme() {
+  localStorage.setItem(THEME_PREF_KEY, isLanguageThemeEnabled() ? "0" : "1");
+  applyLanguageTheme();
 }
 
 function showScreen(name) {
   Object.values(screens).forEach((s) => s.classList.add("hidden"));
   screens[name].classList.remove("hidden");
-  applyLanguageTheme(name === "language");
+  onLanguageScreen = name === "language";
+  applyLanguageTheme();
 }
 
 // ---------- stats persistence ----------
@@ -593,6 +614,7 @@ function refreshModeScreen() {
 }
 
 function bindStaticEvents() {
+  el("theme-toggle").addEventListener("click", toggleLanguageTheme);
   el("back-to-language").addEventListener("click", () => showScreen("language"));
   el("back-to-modes").addEventListener("click", () => showScreen("mode"));
   el("quit-quiz").addEventListener("click", () => {
