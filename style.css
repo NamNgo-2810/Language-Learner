@@ -879,3 +879,325 @@ h2 { font-size: 1.15rem; margin: 0 0 4px; }
 .strokes-status.incorrect { color: var(--bad); }
 .subprompt .subtle-inline { font-size: 0.9rem; font-style: italic; }
 #strokes-hanviet { margin: 0; }
+
+/* =====================================================================
+   Mandarin theme: Journey to the West (西游记)
+   Applied as body.theme-xiyouji by app.js once Mandarin is chosen.
+   Night-lacquer red and gold outside, parchment scrolls for the cards
+   you study on, the Monkey King's golden staff as the progress bar.
+   ===================================================================== */
+
+body { transition: background-color 0.4s ease, color 0.4s ease; }
+
+body.theme-xiyouji {
+  --bg: #1c0b0a;          /* lacquered night */
+  --card: #2d1310;        /* temple lacquer */
+  --card-hover: #3d1a14;
+  --text: #f6e7c6;        /* ivory */
+  --subtle: #c8a679;      /* faded gold */
+  --accent: #e8b23a;      /* golden staff */
+  --good: #3fb07c;        /* jade */
+  --bad: #e2493a;         /* vermilion */
+  --border: #5c2c1e;
+  --cinnabar: #b8261c;
+  --cinnabar-dark: #8a1a12;
+  --gold: #e8b23a;
+  --gold-light: #ffd97a;
+  --ink: #2a1a10;
+  --brush-font: "Ma Shan Zheng", "KaiTi", "STKaiti", "Noto Serif SC", serif;
+
+  font-family: "Noto Serif SC", Georgia, "Times New Roman", serif;
+  background-color: var(--bg);
+  background-image:
+    /* golden auspicious clouds (祥云) */
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='140' viewBox='0 0 220 140'%3E%3Cg fill='none' stroke='%23e8b23a' stroke-opacity='0.07' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M28 92c-12 0-17-14-8-21 8-6 19 0 17 9-1 6-9 7-11 2'/%3E%3Cpath d='M37 92c-2-17 18-27 31-17 5-15 30-17 36 1 13-6 27 4 23 16'/%3E%3Cpath d='M127 92c11 0 16-13 7-20-7-5-17 0-15 8 1 5 8 6 10 2'/%3E%3Cpath d='M20 100h118'/%3E%3Cpath d='M150 36c-8 0-12-9-6-14 6-4 13 0 12 6-1 4-6 5-8 2'/%3E%3Cpath d='M156 36c-1-11 12-18 21-11 4-10 20-11 24 1 8-4 17 3 15 10'/%3E%3Cpath d='M146 42h72'/%3E%3C/g%3E%3C/svg%3E"),
+    radial-gradient(ellipse at 50% -10%, rgba(232, 178, 58, 0.18), transparent 55%),
+    radial-gradient(ellipse at 50% 120%, rgba(184, 38, 28, 0.35), transparent 60%);
+  background-attachment: fixed;
+}
+
+.theme-xiyouji ::selection { background: var(--cinnabar); color: var(--text); }
+
+/* ---------- header: gold title with a red seal chop ---------- */
+
+.theme-xiyouji header {
+  padding-bottom: 14px;
+  border-bottom: 3px double rgba(232, 178, 58, 0.55);
+}
+.theme-xiyouji h1 {
+  font-family: var(--brush-font);
+  font-weight: 400;
+  font-size: 2rem;
+  letter-spacing: 0.04em;
+  color: var(--gold);
+  text-shadow: 0 1px 0 #7a4a10, 0 0 18px rgba(232, 178, 58, 0.35);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.theme-xiyouji h1::after {
+  content: "西游";
+  font-family: var(--brush-font);
+  writing-mode: vertical-rl;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 5px 3px;
+  color: #fbe9c8;
+  text-shadow: none;
+  background: var(--cinnabar);
+  border: 1px solid #e05a45;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 2px var(--cinnabar), inset 0 0 0 3px rgba(251, 233, 200, 0.6);
+}
+
+.theme-xiyouji h2 {
+  color: var(--gold);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.theme-xiyouji #mode-lang-title::after {
+  content: "取经之路";
+  font-family: var(--brush-font);
+  font-weight: 400;
+  margin-left: 10px;
+  font-size: 1rem;
+  color: var(--subtle);
+}
+
+/* ---------- lacquer panels (mode cards, day rows, chips) ---------- */
+
+.theme-xiyouji .lang-card,
+.theme-xiyouji .mode-card,
+.theme-xiyouji .today-card,
+.theme-xiyouji .day-row,
+.theme-xiyouji .added-row,
+.theme-xiyouji .missed-chip,
+.theme-xiyouji .pinyin-practice-line,
+.theme-xiyouji .compose-feedback {
+  background: linear-gradient(160deg, #35170f, var(--card) 60%);
+  border-color: rgba(232, 178, 58, 0.28);
+  box-shadow: inset 0 1px 0 rgba(255, 217, 122, 0.08), 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+.theme-xiyouji .missed-chip { border-color: var(--bad); }
+
+.theme-xiyouji .mode-card {
+  position: relative;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+.theme-xiyouji .lang-card:hover,
+.theme-xiyouji .mode-card:hover,
+.theme-xiyouji .day-row:hover {
+  background: linear-gradient(160deg, #47200f, var(--card-hover) 60%);
+  border-color: var(--gold);
+  box-shadow: 0 0 0 1px rgba(232, 178, 58, 0.25), 0 6px 18px rgba(232, 178, 58, 0.12);
+}
+.theme-xiyouji .mode-card:hover { transform: translateY(-1px); }
+/* small gold corner ornament on each mode card */
+.theme-xiyouji .mode-card::after {
+  content: "";
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 14px;
+  height: 14px;
+  border-top: 2px solid rgba(232, 178, 58, 0.45);
+  border-right: 2px solid rgba(232, 178, 58, 0.45);
+  border-radius: 0 6px 0 0;
+}
+.theme-xiyouji .mode-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.2rem;
+  height: 2.2rem;
+  font-size: 1.15rem;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #d8392a, var(--cinnabar-dark));
+  border: 1px solid var(--gold);
+  box-shadow: 0 0 0 2px rgba(232, 178, 58, 0.15);
+}
+.theme-xiyouji .mode-name { color: var(--gold-light); }
+
+/* ---------- buttons: cinnabar lacquer with gold trim ---------- */
+
+.theme-xiyouji .primary-btn {
+  background: linear-gradient(180deg, #d0382a, var(--cinnabar) 50%, var(--cinnabar-dark));
+  color: #fff3d6;
+  border: 1px solid var(--gold);
+  box-shadow: inset 0 1px 0 rgba(255, 217, 122, 0.35), 0 2px 8px rgba(0, 0, 0, 0.35);
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.3);
+}
+.theme-xiyouji .primary-btn:disabled { filter: grayscale(0.6) brightness(0.8); cursor: not-allowed; }
+.theme-xiyouji .secondary-btn {
+  background: #3a1a12;
+  color: var(--text);
+  border: 1px solid rgba(232, 178, 58, 0.35);
+}
+.theme-xiyouji .secondary-btn:hover { border-color: var(--gold); }
+.theme-xiyouji .rate-btn { border: 1px solid rgba(255, 243, 214, 0.35); }
+.theme-xiyouji .link-btn { color: var(--subtle); }
+.theme-xiyouji .link-btn:hover { color: var(--gold-light); }
+
+/* ---------- golden staff (如意金箍棒) progress bars ---------- */
+
+.theme-xiyouji .progress-track {
+  height: 10px;
+  border-radius: 5px;
+  background: #2a0f0b;
+  border: 1px solid rgba(232, 178, 58, 0.25);
+}
+.theme-xiyouji .progress-fill {
+  border-radius: 5px;
+  background:
+    linear-gradient(90deg, var(--cinnabar) 0 10px, transparent 10px calc(100% - 10px), var(--cinnabar) calc(100% - 10px)),
+    linear-gradient(180deg, var(--gold-light), var(--gold) 50%, #a8741a);
+  box-shadow: 0 0 8px rgba(232, 178, 58, 0.5);
+}
+.theme-xiyouji .progress-fill.done {
+  background:
+    linear-gradient(90deg, var(--cinnabar) 0 10px, transparent 10px calc(100% - 10px), var(--cinnabar) calc(100% - 10px)),
+    linear-gradient(180deg, #7fe0b0, var(--good) 50%, #23764f);
+}
+
+/* ---------- parchment scrolls for study cards ---------- */
+
+.theme-xiyouji .quiz-card {
+  /* everything inside the scroll uses ink-on-parchment colours */
+  --bg: #ecdcb4;
+  --card: #f6ead0;
+  --card-hover: #efdfb9;
+  --text: var(--ink);
+  --subtle: #7b5a38;
+  --accent: var(--cinnabar);
+  --good: #23855a;
+  --bad: #c0331f;
+  --border: #d4bb88;
+  /* Hanzi Writer canvas colours (read by app.js) */
+  --hw-stroke: #2a1a10;
+  --hw-outline: #d9c49a;
+  --hw-drawing: #b8261c;
+  --hw-highlight: #23855a;
+
+  position: relative;
+  margin: 14px 4px;
+  color: var(--text);
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(255, 255, 255, 0.45), transparent 60%),
+    radial-gradient(ellipse at 0% 100%, rgba(150, 100, 40, 0.18), transparent 50%),
+    radial-gradient(ellipse at 100% 100%, rgba(150, 100, 40, 0.18), transparent 50%),
+    #f3e5c4;
+  border: 1px solid #c9a96a;
+  border-radius: 6px;
+  box-shadow: inset 0 0 40px rgba(140, 90, 30, 0.25), 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+/* wooden scroll rollers with gold caps */
+.theme-xiyouji .quiz-card::before,
+.theme-xiyouji .quiz-card::after {
+  content: "";
+  position: absolute;
+  left: -10px;
+  right: -10px;
+  height: 14px;
+  border-radius: 7px;
+  background:
+    linear-gradient(90deg, var(--gold) 0 12px, transparent 12px calc(100% - 12px), var(--gold) calc(100% - 12px)),
+    linear-gradient(180deg, #8a4a24, #5a2a12 60%, #3a1808);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+.theme-xiyouji .quiz-card::before { top: -9px; }
+.theme-xiyouji .quiz-card::after { bottom: -9px; }
+
+/* big characters are brushed in ink */
+.theme-xiyouji .prompt,
+.theme-xiyouji .hint-reveal,
+.theme-xiyouji .strokes-done {
+  font-family: var(--brush-font);
+  font-weight: 400;
+}
+.theme-xiyouji .prompt { font-size: 3.6rem; color: var(--ink); }
+.theme-xiyouji .prompt.pinyin-prompt,
+.theme-xiyouji .prompt.pinyin-context {
+  font-family: "Noto Serif SC", Georgia, serif;
+  font-size: 2rem;
+}
+.theme-xiyouji .prompt.pinyin-context { font-size: 1.3rem; }
+.theme-xiyouji .answer-reveal { font-weight: 600; }
+
+.theme-xiyouji .option-btn {
+  background: var(--card);
+  border: 2px solid var(--border);
+  color: var(--text);
+  font-family: "Noto Serif SC", Georgia, serif;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.5) inset;
+}
+.theme-xiyouji .option-btn:hover { border-color: var(--cinnabar); }
+.theme-xiyouji .option-btn.correct { background: var(--good); border-color: var(--good); color: #fff; }
+.theme-xiyouji .option-btn.incorrect { background: var(--bad); border-color: var(--bad); color: #fff; }
+
+.theme-xiyouji .quiz-card .secondary-btn {
+  background: #e6d1a3;
+  color: var(--ink);
+  border-color: #c9a96a;
+}
+.theme-xiyouji .quiz-card .secondary-btn:hover { border-color: var(--cinnabar); }
+.theme-xiyouji .quiz-card .link-btn:hover { color: var(--cinnabar); }
+
+.theme-xiyouji .dnd-chip { background: #e6d1a3; }
+.theme-xiyouji .dnd-chip:hover { border-color: var(--cinnabar); }
+.theme-xiyouji .dnd-slots { border-color: #c9a96a; }
+
+/* 米字格 practice grid in red, like a calligraphy copybook */
+.theme-xiyouji .strokes-target {
+  border: 2px solid var(--cinnabar);
+  border-radius: 2px;
+  background-color: #f8eed6;
+  background-image:
+    linear-gradient(to right, transparent calc(50% - 0.5px), rgba(184, 38, 28, 0.45) calc(50% - 0.5px), rgba(184, 38, 28, 0.45) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(50% - 0.5px), rgba(184, 38, 28, 0.45) calc(50% - 0.5px), rgba(184, 38, 28, 0.45) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+    linear-gradient(to top right, transparent calc(50% - 0.5px), rgba(184, 38, 28, 0.25) 50%, transparent calc(50% + 0.5px)),
+    linear-gradient(to bottom right, transparent calc(50% - 0.5px), rgba(184, 38, 28, 0.25) 50%, transparent calc(50% + 0.5px));
+}
+
+/* story / compose text on the scroll */
+.theme-xiyouji .story-text,
+.theme-xiyouji .compose-text { font-family: "Noto Serif SC", "KaiTi", serif; }
+
+/* ---------- inputs ---------- */
+
+.theme-xiyouji input[type="text"],
+.theme-xiyouji input[type="number"],
+.theme-xiyouji select,
+.theme-xiyouji textarea { font-family: inherit; }
+.theme-xiyouji input:focus,
+.theme-xiyouji select:focus,
+.theme-xiyouji textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+.theme-xiyouji .toggle-row input,
+.theme-xiyouji .day-row input { accent-color: var(--cinnabar); }
+
+/* ---------- modal, popup, toast ---------- */
+
+.theme-xiyouji .modal-overlay { background: rgba(20, 5, 3, 0.72); }
+.theme-xiyouji .modal {
+  background: linear-gradient(180deg, #2a100c, var(--bg));
+  border: 1px solid var(--gold);
+  box-shadow: 0 0 0 4px rgba(184, 38, 28, 0.35), 0 16px 48px rgba(0, 0, 0, 0.6);
+}
+.theme-xiyouji .pinyin-popup {
+  background: var(--cinnabar);
+  border: 1px solid var(--gold);
+  color: #fff3d6;
+}
+.theme-xiyouji .story-text .speaking { background: var(--gold); color: var(--ink); }
+.theme-xiyouji .toast { border: 1px solid var(--gold); color: #10241a; }
+
+/* ---------- misc ---------- */
+
+.theme-xiyouji .compose-word { background: #3a1a12; }
+.theme-xiyouji .quiz-card .compose-word { background: #e6d1a3; }
+.theme-xiyouji .issue-cat { background: #3a1a12; }
+.theme-xiyouji .day-row.is-latest .day-label::after { color: var(--gold); border-color: var(--gold); }
+.theme-xiyouji .rem-bar { background: #2a0f0b; }

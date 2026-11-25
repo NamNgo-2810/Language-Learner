@@ -107,9 +107,18 @@ const screens = {
   results: el("screen-results"),
 };
 
+// Per-language visual themes, applied to <body> once a language is chosen.
+const LANGUAGE_THEMES = { mandarin: "theme-xiyouji" }; // Journey to the West (西游记)
+
+function applyLanguageTheme(onLanguageScreen) {
+  const active = onLanguageScreen ? null : LANGUAGE_THEMES[state.currentLanguage?.id];
+  Object.values(LANGUAGE_THEMES).forEach((cls) => document.body.classList.toggle(cls, cls === active));
+}
+
 function showScreen(name) {
   Object.values(screens).forEach((s) => s.classList.add("hidden"));
   screens[name].classList.remove("hidden");
+  applyLanguageTheme(name === "language");
 }
 
 // ---------- stats persistence ----------
@@ -3145,16 +3154,19 @@ function renderStrokes(entry) {
   const size = Math.max(180, Math.min(280, el("quiz-card").clientWidth - 48));
   target.style.width = `${size}px`;
   target.style.height = `${size}px`;
+  // Colours come from CSS custom properties so a language theme can restyle the canvas.
+  const cs = getComputedStyle(target);
+  const cssColor = (name, fallback) => cs.getPropertyValue(name).trim() || fallback;
   strokeWriter = window.HanziWriter.create(target, chars[0], {
     width: size,
     height: size,
     padding: 12,
     showCharacter: false,
     showOutline: false,
-    strokeColor: "#f1f3f9",
-    outlineColor: "#3a4170",
-    drawingColor: "#6c8cff",
-    highlightColor: "#3ecf8e",
+    strokeColor: cssColor("--hw-stroke", "#f1f3f9"),
+    outlineColor: cssColor("--hw-outline", "#3a4170"),
+    drawingColor: cssColor("--hw-drawing", "#6c8cff"),
+    highlightColor: cssColor("--hw-highlight", "#3ecf8e"),
     drawingWidth: 6,
     showHintAfterMisses: 3,
     onLoadCharDataError: () => {
